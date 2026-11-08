@@ -168,6 +168,31 @@ class Agents(unittest.TestCase):
         self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
         self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
 
+    def test_the_proposal_template_checks_the_reviewed_commit_before_any_install(self):
+        path = ROOT / "templates" / "proposal.md"
+        self.assertTrue(path.exists())
+        text = path.read_text()
+        first_install = text.index("install -m")
+        for check in (
+            "git branch --show-current",
+            "git status --porcelain -- docs/proposed/",
+            "git diff --exit-code <REVIEWED_COMMIT>",
+        ):
+            self.assertIn(check, text)
+            self.assertLess(text.index(check), first_install, check)
+        self.assertLess(text.index("git diff --exit-code <REVIEWED_COMMIT>"), text.index("git diff --exit-code <BASE_COMMIT>"))
+        self.assertLess(text.index("git diff --exit-code <BASE_COMMIT>"), first_install)
+        self.assertIn("env -u", text)
+        self.assertIn("git checkout <BASE_COMMIT> --", text)
+        self.assertIn("what the checks cannot see", text.lower())
+
+    def test_manager_and_builder_use_the_proposal_template(self):
+        manager, builder = AGENTS["manager"], AGENTS["builder"]
+        self.assertIn("templates/proposal.md", manager)
+        self.assertRegex(manager, r"(?i)full reviewed commit hash")
+        self.assertIn("step 0", manager)
+        self.assertIn("templates/proposal.md", builder)
+
     def test_the_plugin_version_is_0_4_0(self):
         self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.4.0")
 
