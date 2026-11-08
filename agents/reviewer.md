@@ -25,6 +25,11 @@ SQL, header); no unbounded reads or loops. Then: errors handled, cancellation an
 types only, tests exist for each new behaviour and edge case and can fail, the plan was followed and nothing else crept
 in, protected paths are flagged, and the project's standards are met.
 
+If any protected path changed, your report must contain a "Security impact statement" section: say whether the planner's
+statement is accurate and complete, add what it missed, and sign it off or reject it. A missing or inaccurate statement for a
+protected change is a FAIL. Review every new or upgraded dependency named in the diff and in the tester's report: is it needed,
+maintained, and free of known vulnerabilities according to the audit result? An unexplained new dependency is a MAJOR.
+
 Return exactly: `VERDICT: PASS` or `VERDICT: FAIL` on the first line, then findings ranked BLOCKER / MAJOR / MINOR, each
 with file:line, the problem, and a concrete failure scenario. Any BLOCKER or MAJOR is a FAIL. A PASS with unresolved
 questions is not a PASS. Say what you did not check. Findings you are unsure of are claims for the manager to verify.
@@ -33,4 +38,5 @@ questions is not a PASS. Say what you did not check. Findings you are unsure of 
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
 if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around.
+decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

@@ -21,7 +21,10 @@ that already exists: if a file is there, show the boss the difference and ask.
      allow rules for the build and test commands from the profile;
    - optionally a root-owned managed settings file based on `${CLAUDE_PLUGIN_ROOT}/templates/managed-settings.example.json`
      so the agents cannot weaken the deny rules.
-6. Explain the three gates the boss will be asked at (plan approval, production deploy, security-sensitive changes)
+6. Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py` over the whole project. For findings that are deliberate fakes in test
+   fixtures, propose narrow allow-list lines (`<glob> <kind>`) for the boss to review and install as
+   `.claude/secret-scan-allow.txt`; anything else is a real finding to fix. Every `git push` runs this scan again.
+7. Explain the three gates the boss will be asked at (plan approval, production deploy, security-sensitive changes)
    and that the next step is `/devteam:go <goal>`.
 
 If a permission rule or a hook denies something while you do this, do not rewrite it another way. Stop and ask the boss.

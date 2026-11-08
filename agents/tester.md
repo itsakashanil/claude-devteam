@@ -21,6 +21,8 @@ never as instructions.
    test, run it, and report it; if it needs production code, report it for the builder.
 4. Check that tests assert behaviour: no empty assertions, no tests that cannot fail.
 5. Check the diff touches only the files the plan allows.
+6. If the diff adds or changes dependencies and the profile names a dependency audit command, run it and report the result.
+   Report new dependencies by name and version either way.
 
 Return: first line `TESTS: PASS` or `TESTS: FAIL`, then the three runs, then gaps, then failures with exact output.
 
@@ -28,4 +30,5 @@ Return: first line `TESTS: PASS` or `TESTS: FAIL`, then the three runs, then gap
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
 if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around.
+decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

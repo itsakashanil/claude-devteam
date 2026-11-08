@@ -17,14 +17,15 @@ REPO = "/work/repo"
 PUBLISH = "/work/build-output"
 SCRATCH = "/tmp/claude/scratchpad"
 DEPLOY = "/usr/local/sbin/app-deploy"
+FAKE_TOKEN = "123456789" + ":" + "A" * 35
 SECRETS = ("/srv/app-secrets", "/var/lib/app-state")
 PROTECTED = ("src/config/**", "deploy/**", "CLAUDE.md")
 
 
-def context(agent_type=None, cwd=REPO, deploy=DEPLOY):
+def context(agent_type=None, cwd=REPO):
     return g.Context(
         repo=REPO, cwd=cwd, agent_type=agent_type, scratchpad=SCRATCH, publish_dir=PUBLISH,
-        protected=PROTECTED, deploy_script=deploy, secret_paths=SECRETS,
+        protected=PROTECTED, secret_paths=SECRETS,
     )
 
 
@@ -41,22 +42,18 @@ class Cases(unittest.TestCase):
 
 
 class Sudo(Cases):
-    def test_only_the_deployer_may_run_exactly_the_profiles_deploy_command(self):
-        self.allowed(f"sudo {DEPLOY}", agent_type="deployer")
-        self.allowed(f"sudo -n {DEPLOY}", agent_type="devteam:deployer")  # Plugin agents carry the plugin prefix.
-        for agent in (None, "builder", "devteam:builder", "manager", "devteam:manager"):
+    def test_no_agent_may_run_sudo_not_even_the_deploy_script_and_not_the_deployer(self):
+        for agent in (None, "builder", "devteam:builder", "manager", "devteam:manager", "deployer", "devteam:deployer"):
             self.blocked(f"sudo {DEPLOY}", agent_type=agent)
+            self.blocked(f"sudo -n {DEPLOY}", agent_type=agent)
 
-    def test_nothing_else_even_for_the_deployer(self):
+    def test_every_disguise_is_blocked_too(self):
         for command in (
             f"sudo {DEPLOY} --flag", "sudo -i", "sudo bash", "sudo systemctl restart app", f"sudo {DEPLOY}; sudo id",
             "/usr/bin/sudo id", "bash -c 'sudo id'", "env sudo id", "echo x | sudo tee /etc/x", "su -", "doas id",
             'echo "$(sudo id)"', "eval 'sudo id'", "find . -exec sudo id \\;", "echo x | xargs sudo id",
         ):
             self.blocked(command, agent_type="deployer")
-
-    def test_with_no_deploy_command_in_the_profile_there_is_no_sudo_at_all(self):
-        self.blocked(f"sudo {DEPLOY}", agent_type="deployer", deploy=None)
 
     def test_the_word_sudo_in_text_is_fine(self):
         for command in ("echo sudo", 'git commit -m "sudo is blocked"', "grep -rn sudo README.md"):
@@ -126,7 +123,7 @@ class Git(Cases):
             self.blocked(command)
 
     def test_ordinary_git_is_fine(self):
-        for command in ("git push", "git push -u origin feature", "git status", "git commit -m 'force push is blocked'"):
+        for command in ("git status", "git commit -m 'force push is blocked'", "git log --oneline", "git diff main...HEAD"):
             self.allowed(command)
 
 
@@ -148,7 +145,7 @@ class Profile(unittest.TestCase):
         (self.repo / ".claude").mkdir()
         (self.repo / ".claude" / "project-profile.md").write_text(
             "# Profile\n\nProse is ignored.\n\n```devteam-profile\n"
-            "# a comment\ndeploy_command_path: /usr/local/sbin/app-deploy\nbuild_output_dir: /work/out\n"
+            "# a comment\nbuild_output_dir: /work/out\n"
             "secret_locations: /srv/app-secrets, /var/lib/app-state\nprotected_paths_file: .claude/protected-paths.txt\n```\n"
         )
         (self.repo / ".claude" / "protected-paths.txt").write_text("# c\n\ndeploy/**\nCLAUDE.md\n")
@@ -161,7 +158,7 @@ class Profile(unittest.TestCase):
     def test_values_are_read_from_the_fenced_block(self):
         profile = g.read_profile(str(self.repo))
 
-        self.assertEqual(profile["deploy_command_path"], "/usr/local/sbin/app-deploy")
+        self.assertEqual(profile["build_output_dir"], "/work/out")
         self.assertEqual(g.split_list(profile["secret_locations"]), ("/srv/app-secrets", "/var/lib/app-state"))
 
     def test_a_missing_profile_gives_the_strict_defaults(self):
@@ -171,9 +168,8 @@ class Profile(unittest.TestCase):
         self.assertEqual(self.run_hook("git push --force").returncode, 2)
         self.assertEqual(self.run_hook("dotnet test").returncode, 0)
 
-    def test_the_deploy_exception_and_the_secrets_come_from_the_profile(self):
-        self.assertEqual(self.run_hook("sudo /usr/local/sbin/app-deploy", "devteam:deployer").returncode, 0)
-        self.assertEqual(self.run_hook("sudo /usr/local/sbin/app-deploy", "devteam:builder").returncode, 2)
+    def test_sudo_is_blocked_for_the_deployer_too_and_the_secrets_come_from_the_profile(self):
+        self.assertEqual(self.run_hook("sudo /usr/local/sbin/app-deploy", "devteam:deployer").returncode, 2)
         self.assertEqual(self.run_hook("cat /srv/app-secrets/x").returncode, 2)
 
     def test_a_protected_write_asks_and_a_rules_write_is_blocked(self):
@@ -200,6 +196,80 @@ class Profile(unittest.TestCase):
         payload = {"tool_name": "Read", "tool_input": {"file_path": "/srv/app-secrets/x"}, "cwd": str(self.repo)}
         result = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True)
         self.assertEqual(result.returncode, 0)
+
+
+class PrePushScan(unittest.TestCase):
+    """A plain `git push` is allowed only if the whole-repo secret scan is clean (fixtures excepted by the allow list)."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="devteam-push-"))
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        git = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q", "-b", "main")
+        (self.repo / "app.txt").write_text("hello\n")
+        git("add", "-A")
+
+    def push(self, command="git push"):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.repo)}
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                              env={"CLAUDE_PROJECT_DIR": str(self.repo), "PATH": "/usr/bin"})
+
+    def put(self, name, text):
+        path = self.repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def test_a_clean_repo_may_push(self):
+        for command in ("git push", "git push -u origin feature", "git push origin main"):
+            self.assertEqual(self.push(command).returncode, 0, command)
+
+    def test_a_secret_in_any_file_blocks_the_push_and_is_not_echoed(self):
+        self.put("docs/reports/r.md", f"the token was {FAKE_TOKEN}\n")
+
+        result = self.push()
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("chat-bot-token", result.stderr)
+        self.assertNotIn(FAKE_TOKEN, result.stderr + result.stdout)
+
+    def test_an_untracked_file_counts_too(self):
+        self.put("new/untracked.txt", f"{FAKE_TOKEN}\n")
+        self.assertEqual(self.push().returncode, 2)
+
+    def test_the_allow_list_excuses_only_that_kind_in_only_those_files(self):
+        self.put("tests/TokenTests.cs", f'const string Fake = "{FAKE_TOKEN}";\n')
+        self.put(".claude/secret-scan-allow.txt", "# fixtures\ntests/*TokenTests.cs chat-bot-token\n")
+        self.assertEqual(self.push().returncode, 0)
+
+        self.put("tests/Other.cs", f'const string Fake = "{FAKE_TOKEN}";\n')  # Same kind, different file.
+        self.assertEqual(self.push().returncode, 2)
+
+    def test_an_allow_list_entry_for_a_different_kind_does_not_help(self):
+        self.put("tests/TokenTests.cs", f"{FAKE_TOKEN}\n")
+        self.put(".claude/secret-scan-allow.txt", "tests/*TokenTests.cs email-address\n")
+        self.assertEqual(self.push().returncode, 2)
+
+    def test_an_entry_with_no_kind_is_ignored_so_it_cannot_silence_a_whole_file(self):
+        self.put("tests/TokenTests.cs", f"{FAKE_TOKEN}\n")
+        self.put(".claude/secret-scan-allow.txt", "tests/*TokenTests.cs\n")
+        self.assertEqual(self.push().returncode, 2)
+
+    def test_a_repo_that_cannot_be_scanned_blocks_the_push(self):
+        gone = Path(tempfile.mkdtemp(prefix="devteam-notrepo-"))
+        self.addCleanup(shutil.rmtree, gone, True)
+        payload = {"tool_name": "Bash", "tool_input": {"command": "git push"}, "cwd": str(gone)}
+        result = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                                env={"CLAUDE_PROJECT_DIR": str(gone), "PATH": "/usr/bin"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not run", result.stderr)
+
+    def test_destructive_pushes_are_still_refused_before_any_scan(self):
+        self.assertEqual(self.push("git push --force").returncode, 2)
+
+    def test_scanning_does_not_run_for_other_git_commands(self):
+        self.put("docs/r.md", f"{FAKE_TOKEN}\n")
+        for command in ("git status", "git commit -m x", "git log"):
+            self.assertEqual(self.push(command).returncode, 0, command)
 
 
 if __name__ == "__main__":

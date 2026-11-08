@@ -5,20 +5,20 @@ about any one project. Project specifics come from .claude/project-profile.md (s
 Exit 2 blocks the call and the reason on stderr goes back to the agent. Anything unparseable is blocked.
 A JSON "ask" decision on stdout (exit 0) makes the permission prompt appear for the boss (gate 3).
 
-  1. sudo and other privilege tools: blocked, except exactly `sudo <deploy_command_path>` from the `deployer`
-     agent, and only when the profile names one. (A deny rule on sudo would also block that: deny beats allow.)
+  1. sudo and other privilege tools: always blocked, for every agent. Deploys are run by the boss.
   2. rm, rmdir, unlink, shred, find -delete/-exec: only inside the repo, the build output directory and the
      session scratchpad, and never the repo root or .git itself.
   3. Writing to the team's own rules: cp, mv, install, ln, tee, sed -i, touch, chmod, rm... aimed at anything
      under .claude/ is blocked. The same commands aimed at a protected path (the file named by
      `protected_paths_file`) ask the boss first.
-  4. git push: no force, delete or mirror pushes in any spelling.
+  4. git push: no force, delete or mirror pushes in any spelling, and a plain push runs the full-repo secret scan
+     first (secret_scan.py, with the project's allow list for test fixtures) and is blocked on any finding or error.
   5. The project's secret locations (`secret_locations` in the profile) are never mentioned.
 
 It looks inside bash -c, env, timeout, xargs, find -exec, heredocs and command substitutions (including ones
 inside double quotes), tracks cd, and blocks anything it cannot parse.
 
-With no profile the strictest generic rules apply: no sudo at all, deletes only inside the repo, no force pushes.
+With no profile the strictest generic rules still apply: deletes only inside the repo, no force pushes.
 
 This is a guardrail against mistakes and prompt injection, not a sandbox: a program that builds its own command
 line (python -c, a script file) is beyond what a text check can see. The real boundary is OS account separation.
@@ -58,7 +58,6 @@ class Context:
     scratchpad: str | None
     publish_dir: str | None = None
     protected: tuple[str, ...] = ()
-    deploy_script: str | None = None  # The one command the deployer may run with sudo; None means no sudo at all.
     secret_paths: tuple[str, ...] = ()  # Locations nobody on the team may mention.
 
 
@@ -313,14 +312,7 @@ def check_sudo(tokens: list[str], ctx: Context) -> str | None:
     if args[:1] in (["-n"], ["--non-interactive"]):
         args = args[1:]
 
-    deploy = ctx.deploy_script
-    if deploy and tokens[0] == "sudo" and args == [deploy]:
-        if (ctx.agent_type or "").split(":")[-1] == DEPLOYER:  # Plugin agents are named "<plugin>:<agent>".
-            return None
-        return f"only the deployer agent may run {deploy}, after the boss has approved the deploy"
-
-    exception = f"; the only exception is exactly `sudo {deploy}` from the deployer agent" if deploy else ""
-    return f"sudo and other privilege tools are blocked{exception}"
+    return "sudo and other privilege tools are blocked for every agent; the boss runs deploys and anything else that needs root"
 
 
 # --- shells, xargs, eval ---------------------------------------------------------------------------
@@ -546,6 +538,23 @@ def check_git(args: list[str], ctx: Context, state: dict) -> str | None:
             or arg.startswith(":")
         ):
             return "force, delete and mirror pushes are not allowed; ask the boss"
+    return push_scan(ctx)
+
+
+def push_scan(ctx: Context) -> str | None:
+    """Every push is preceded by a whole-repo secret scan, so a leak cannot ride along. Fails closed."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import secret_scan
+
+        found, complete = secret_scan.scan_repo(ctx.repo)
+    except Exception as error:  # Cannot list or read the repo: never read as clean.
+        return f"the pre-push secret scan could not run ({type(error).__name__}); fix that before pushing"
+    if found:
+        shown = ", ".join(f"{p.name}:{n} {k}" for p, n, k in found[:5])
+        return f"the pre-push secret scan found {len(found)} finding(s) ({shown}); remove them or, for deliberate fakes, add a narrow entry to the allow list (the boss does that)"
+    if not complete:
+        return "the pre-push secret scan could not read some files, so it is incomplete"
     return None
 
 
@@ -601,7 +610,6 @@ def main() -> int:
         scratchpad=payload.get("scratchpad_dir"),
         protected=load_protected(repo, profile),
         publish_dir=profile.get("build_output_dir") or None,
-        deploy_script=profile.get("deploy_command_path") or None,
         secret_paths=split_list(profile.get("secret_locations", "")),
     )
 

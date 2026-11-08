@@ -10,16 +10,16 @@ Read by the guard hook. One `key: value` per line; lists are comma-separated. Le
 ```devteam-profile
 project_name: my-project
 repo_url: https://github.com/OWNER/REPO
-deploy_command_path:
 build_output_dir:
 secret_locations:
 protected_paths_file: .claude/protected-paths.txt
+secret_scan_allowlist: .claude/secret-scan-allow.txt
 ```
 
-- `deploy_command_path`: the single absolute path of a root deploy script, if your deploys use sudo. The deployer
-  agent is then the only one allowed to run exactly `sudo <path>`, and only after you approve. Empty = no sudo at all.
 - `build_output_dir`: where the deployer builds the artifact. Deleting inside it is allowed.
 - `secret_locations`: directories nobody on the team may read or mention (for example `/etc/myapp`).
+- `secret_scan_allowlist`: file of `<glob> <kind>[,<kind>]` lines that excuse deliberate fake secrets in test fixtures, only
+  that kind and only in those files. Only you edit it. Every `git push` runs a whole-repo scan and is blocked on any other finding.
 - `repo_url`: used to put a link to the task report in the "deployed" notification.
 
 ## Build and test
@@ -28,12 +28,16 @@ protected_paths_file: .claude/protected-paths.txt
 - Other suites to run when their files change: `<command>` (for example the plugin's own tests)
 
 ## Deploy flow
-Who runs the deploy and how. For a manual deploy: the deployer builds to `build_output_dir`, announces
+Deploys are always manual: no agent runs sudo. The deployer builds to `build_output_dir`, announces
 "ready to deploy <version>" and waits; the boss runs the deploy command and replies "deployed".
 - Build artifact command: `<command>`
-- Deploy command (run by the boss, or by the deployer if sudo is configured): `<command>`
+- Deploy command (run by the boss): `<command>`
 - How to verify a deploy: `<commands that show the new version is running; compare a checksum of the artifact>`
 - Rollback point: `<where the previous version is kept>`
+
+## Dependency audit
+Command that lists known-vulnerable dependencies (for example `dotnet list package --vulnerable`, `npm audit`,
+`pip-audit`), or "none". The tester runs it when dependency files change; the reviewer reads the result.
 
 ## Notify method
 How the manager and deployer message the boss: `<command that takes one text argument or stdin>`.

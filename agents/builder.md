@@ -32,4 +32,5 @@ anything the plan missed.
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
 if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around.
+decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

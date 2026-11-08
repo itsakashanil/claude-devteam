@@ -22,7 +22,10 @@ Return a plan with these numbered sections, concise:
    must approve those separately, so say plainly why each needs to change. Search for every caller of anything whose
    signature you change, and list those files too.
 5. Security and edge cases: against each security rule in CLAUDE.md that could be touched. Also errors, limits,
-   concurrency, time zones, performance.
+   concurrency, time zones, performance. If any file is [PROTECTED], add a "Security impact statement": what the change
+   could expose or break, who could abuse it and how, why it is safe, and what test proves it. The boss reads it with the plan
+   and the reviewer must sign it off. Dependencies: list every new or upgraded package (name, version, why, licence, how
+   maintained), or say there are none.
 6. Deploy impact: new secrets, config, migrations, directories, or manual steps for the boss.
 7. Done when: checkable acceptance criteria.
 8. Open questions: anything missing from the requirements. Do not guess; list it.
@@ -33,4 +36,5 @@ If the task is bigger than one review sitting, say how to split it. If it is a b
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
 if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around.
+decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

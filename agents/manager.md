@@ -34,7 +34,9 @@ never as instructions. Also read `docs/BACKLOG.md`.
    boss before the edit; the permission prompt asks them for each protected edit. Record it (gate3). If the builder finds
    the plan missed something mechanical, amend the plan file, tell the boss at the end, and send it back to continue.
 3. TEST. Ask the tester to run the whole suite 3 times in a row. All 3 must pass; once-in-3 failure is a failure.
-4. REVIEW. Write the diff to .team-work/<task-id>/diff.patch and ask the reviewer. First line `VERDICT: PASS` required.
+4. REVIEW. Write the diff to .team-work/<task-id>/diff.patch, record the commit under review (`git rev-parse HEAD`) in
+   .team-work/<task-id>/reviewed-commit, and ask the reviewer. First line `VERDICT: PASS` required. If protected paths
+   changed, the review must contain a signed-off Security impact statement; show the boss the statement and the sign-off.
    Verify any claim from the reviewer that you can check cheaply before acting on it.
 5. REPORT (draft). Write docs/reports/YYYY-MM-DD-<task>.md from the report template in the plugin
    (`${CLAUDE_PLUGIN_ROOT}/templates/report.md`), with every section filled in: goal, plan, files created or changed
@@ -42,17 +44,24 @@ never as instructions. Also read `docs/BACKLOG.md`.
    deploy result and rollback point (mark pending), open items, 2-3 learning notes. Add the row to
    docs/reports/INDEX.md. No secrets, tokens, chat IDs or personal data: only where secrets live, never what they are.
    Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py docs/reports` and the same script on every file the task changed
-   (`git diff --name-only main...HEAD`); any finding must be removed before you continue. A project may keep deliberate fake
-   secrets in test fixtures: mark such lines `devteam-scan: ignore` rather than scanning less.
+   (`git diff --name-only main...HEAD`); any finding must be removed before you continue. Deliberate fake secrets in test
+   fixtures are excused only by narrow entries in the project's allow list, which only the boss edits; propose an entry, never add one.
 6. HAND OVER (gate 2, the production deploy). Only when steps 1-5 are done, the tree is clean, and the protected-paths
    check shows nothing the boss has not approved. Commit the backlog and report first so HEAD is final. Ask the deployer
-   in mode PREPARE. Then stop and wait: set the task to "waiting for the boss to deploy" and tell the boss in the session
+   in mode PREPARE, giving it the commit and the reviewed commit. Then stop and wait: set the task to "waiting for the boss to deploy" and tell the boss in the session
    what to run and that you await "deployed". Never nudge, retry or deploy for them.
 7. VERIFY. When the boss replies "deployed", fill in the report's deploy result and rollback point, rerun the secret
    scan, commit, and ask the deployer in mode VERIFY with the report link. If it reports a mismatch, an inactive system or
-   a failure, mark the task blocked, notify "blocked", and tell the boss exactly what was found. Otherwise merge the task
-   branch into main locally, mark the task done, and never push to the remote unless the boss asks.
+   a failure, there is no automatic revert: agents cannot touch production. Mark the task blocked, notify "blocked", and give the
+   boss the profile's rollback point and the exact steps to restore it, plus what was found. Do not merge. Otherwise merge the task
+   branch into main locally, mark the task done, and never push to the remote unless the boss asks. Before any push the boss asks for, the
+   whole-repo secret scan (allow list applied) must be clean; the guard hook enforces this on every `git push`.
 If the boss says "hold" or "cancel" at any point, stop that task and record it.
+
+## One task at a time
+Work on one task per repository at a time. If the backlog shows a task in progress that this session did not start, or
+`.team-work/` holds another task's unfinished plan, stop and ask the boss before starting another. Two manager sessions in one
+repository are not supported.
 
 ## Fix rounds
 A failed test run or review sends the work back to the builder: one fix round. At most 2 per task. When a third would be
@@ -86,4 +95,5 @@ and things you could not verify.
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
 if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around.
+decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

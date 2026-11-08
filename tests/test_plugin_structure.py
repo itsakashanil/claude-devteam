@@ -88,6 +88,37 @@ class Agents(unittest.TestCase):
         self.assertIn("the report link", text)
         self.assertIn("MISMATCH", text)
         self.assertIn("never run sudo", text.lower())
+        self.assertNotIn("deploy_command_path", text)
+        self.assertIn("REVIEWED commit", text)
+        self.assertIn("code changed after review", text)
+
+    def test_approvals_after_a_denial_are_narrow_in_every_agent(self):
+        for name, text in AGENTS.items():
+            self.assertIn("covers only the exact\naction they approved", text, name)
+
+    def test_gate_3_needs_a_signed_off_security_impact_statement(self):
+        self.assertIn("Security impact statement", AGENTS["planner"])
+        self.assertIn("Security impact statement", AGENTS["reviewer"])
+        self.assertIn("is a FAIL", AGENTS["reviewer"])
+        self.assertIn("Security impact statement", AGENTS["manager"])
+
+    def test_dependencies_are_audited_and_one_task_runs_at_a_time(self):
+        self.assertIn("dependency audit command", AGENTS["tester"])
+        self.assertIn("dependency", AGENTS["reviewer"].lower())
+        self.assertIn("reviewed-commit", AGENTS["manager"])
+        self.assertIn("One task at a time", AGENTS["manager"])
+        self.assertIn("no automatic revert", AGENTS["manager"])
+
+    def test_the_manager_keeps_the_per_task_scan_adds_the_push_scan_and_never_edits_the_allow_list(self):
+        text = AGENTS["manager"]
+        self.assertIn("secret_scan.py docs/reports", text)
+        self.assertIn("whole-repo secret scan", text)
+        self.assertIn("propose an entry, never add one", text)
+
+    def test_the_licence_is_mit(self):
+        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+        self.assertEqual(plugin["license"], "MIT")
+        self.assertTrue((ROOT / "LICENSE").read_text().startswith("MIT License"))
 
 
 class Generic(unittest.TestCase):
@@ -115,7 +146,7 @@ class Generic(unittest.TestCase):
         text = (ROOT / "templates" / "project-profile.md").read_text()
         block = re.search(r"```devteam-profile\n(.*?)```", text, re.S).group(1)
         keys = {line.split(":", 1)[0] for line in block.splitlines() if ":" in line}
-        self.assertEqual(keys, {"project_name", "repo_url", "deploy_command_path", "build_output_dir", "secret_locations", "protected_paths_file"})
+        self.assertEqual(keys, {"project_name", "repo_url", "build_output_dir", "secret_locations", "protected_paths_file", "secret_scan_allowlist"})
         self.assertTrue(callable(guard_bash.read_profile))
 
     def test_no_template_holds_a_secret_shaped_string(self):

@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at exactly three gates, and every finished task gets a written report.
 
-Status: v0.1.0, first version. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.2.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -68,11 +68,20 @@ before handing over, and you should run it before every push: `python3 <plugin>/
 - **A plugin cannot ship permission rules.** Only an `agent` default can come from a plugin, so `/devteam:init` prints the rules and you install them.
   For rules the agents cannot weaken, put a root-owned managed settings file in `/etc/claude-code/` (see `templates/managed-settings.example.json`).
   If you set `allowManagedHooksOnly`, plugin hooks stop running unless you also pin this plugin's hook there.
-- **Deploying is yours.** The default deploy is manual. Setting `deploy_command_path` lets the deployer run exactly `sudo <that path>` after you approve
-  the permission prompt; that is only as safe as the script and your sudoers rule.
+- **Deploying is yours.** No agent can run sudo (the hook blocks it for everyone, the deployer included). The deployer builds, announces
+  "ready to deploy <version>" and, after you deploy, verifies the running artifact. It also refuses to build if anything other than the backlog
+  or reports changed since the commit the reviewer saw. It cannot prove the build tooling itself is uncompromised.
+- **Pushes are scanned.** Every `git push` through the Bash tool first runs a whole-repo secret scan and is blocked on any finding. Deliberate
+  fakes in test fixtures are excused by `.claude/secret-scan-allow.txt` (`<glob> <kind>` per line, only that kind, only those files; an entry
+  with no kind is ignored). Only you edit that file.
+- **Approvals are narrow.** An approval after a denial covers only the exact action you approved.
+- **One task at a time per repository.** Two manager sessions in one repo are not supported.
+- **Cost.** Opus plans and reviews and the suite runs three times per task; that is deliberate for security-sensitive code. For a low-risk
+  project, edit the models in `agents/*.md` or the run count in `agents/tester.md`.
+- **Real isolation.** For stronger boundaries than a text hook, run the build and tests under Claude Code's sandbox or in a container or VM
+  you control; the guard hook is the fallback, not a replacement.
 - **Agent names.** The manager's allowed sub-agents are written as `devteam:planner` etc. If your Claude Code version scopes plugin agents differently,
   adjust the `tools` line in `agents/manager.md`.
-- No licence is chosen yet. Add one before publishing.
 
 ## Develop
 ```bash
