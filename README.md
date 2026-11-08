@@ -13,6 +13,7 @@ Status: v0.2.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `/devteam:go <goal>` | Gives the manager a goal. It runs the whole pipeline and asks you only at the gates. |
 | `/devteam:status` | Summarises `docs/BACKLOG.md`: in progress, blocked, waiting for you, agent-run budget. |
 | 6 agents | manager, planner, builder, tester (sonnet), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
+| Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
 | Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples. |
@@ -67,7 +68,8 @@ before handing over, and you should run it before every push: `python3 <plugin>/
   things they cannot see. Real boundaries are OS users, file permissions and what credentials exist.
 - **A plugin cannot ship permission rules.** Only an `agent` default can come from a plugin, so `/devteam:init` prints the rules and you install them.
   For rules the agents cannot weaken, put a root-owned managed settings file in `/etc/claude-code/` (see `templates/managed-settings.example.json`).
-  If you set `allowManagedHooksOnly`, plugin hooks stop running unless you also pin this plugin's hook there.
+  If you set `allowManagedHooksOnly`, plugin hooks stop running; the project hook that `/devteam:init` creates is the one to pin there
+  (absolute path, `onFailure: block`). Copies do not update with the plugin: after upgrading, rerun the copy and review the diff.
 - **Deploying is yours.** No agent can run sudo (the hook blocks it for everyone, the deployer included). The deployer builds, announces
   "ready to deploy <version>" and, after you deploy, verifies the running artifact. It also refuses to build if anything other than the backlog
   or reports changed since the commit the reviewer saw. It cannot prove the build tooling itself is uncompromised.

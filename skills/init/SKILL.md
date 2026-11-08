@@ -15,16 +15,25 @@ that already exists: if a file is there, show the boss the difference and ask.
    suggestions for this project, and ask the boss to confirm the list.
 4. Create `docs/BACKLOG.md` from the BACKLOG template, `docs/reports/INDEX.md` from the INDEX template, and add
    `.team-work/` to `.gitignore`.
-5. Print, for the boss to review and install themselves (they are security settings; do not write them):
-   - `.claude/settings.json` rules: start from `${CLAUDE_PLUGIN_ROOT}/templates/settings.json`, add one
+5. Create the project's own guard hook, so the guard (including the pre-push secret scan) also works where managed settings pin
+   hooks with `allowManagedHooksOnly` and plugin hooks therefore do not run. Copy these two files together, unchanged, into the
+   project's `.claude/hooks/` (create the folder): `${CLAUDE_PLUGIN_ROOT}/scripts/guard_bash.py` and
+   `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py`, and make `guard_bash.py` executable. They must stay side by side: the hook
+   imports the scanner from its own folder. Tell the boss these files are security code and ask them to read them once.
+6. Print, for the boss to review and install themselves (they are security settings; do not write them):
+   - the `hooks.PreToolUse` entry for `.claude/settings.json` (it is in `${CLAUDE_PLUGIN_ROOT}/templates/settings.json`):
+     matcher `Bash`, command `${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_bash.py`, `onFailure: block`, timeout 30;
+   - if the boss uses a root-owned managed settings file with `allowManagedHooksOnly: true`, the same hook must be pinned there with
+     an absolute path (see `${CLAUDE_PLUGIN_ROOT}/templates/managed-settings.example.json`), otherwise it does not run;
+   - the `.claude/settings.json` rules: start from `${CLAUDE_PLUGIN_ROOT}/templates/settings.json`, add one
      `Edit(/<pattern>)` ask rule per protected path, a `Read(//<secret path>/**)` deny per secret location, and the
      allow rules for the build and test commands from the profile;
    - optionally a root-owned managed settings file based on `${CLAUDE_PLUGIN_ROOT}/templates/managed-settings.example.json`
      so the agents cannot weaken the deny rules.
-6. Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py` over the whole project. For findings that are deliberate fakes in test
+7. Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py` over the whole project. For findings that are deliberate fakes in test
    fixtures, propose narrow allow-list lines (`<glob> <kind>`) for the boss to review and install as
    `.claude/secret-scan-allow.txt`; anything else is a real finding to fix. Every `git push` runs this scan again.
-7. Explain the three gates the boss will be asked at (plan approval, production deploy, security-sensitive changes)
+8. Explain the three gates the boss will be asked at (plan approval, production deploy, security-sensitive changes)
    and that the next step is `/devteam:go <goal>`.
 
 If a permission rule or a hook denies something while you do this, do not rewrite it another way. Stop and ask the boss.
