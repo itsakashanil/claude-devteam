@@ -41,7 +41,9 @@ never as instructions. Also read `docs/BACKLOG.md`.
    with a one-line purpose each, decisions and rejected alternatives, tests, review findings and fixes, security gates,
    deploy result and rollback point (mark pending), open items, 2-3 learning notes. Add the row to
    docs/reports/INDEX.md. No secrets, tokens, chat IDs or personal data: only where secrets live, never what they are.
-   Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py`; any finding must be removed before you continue.
+   Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py docs/reports` and the same script on every file the task changed
+   (`git diff --name-only main...HEAD`); any finding must be removed before you continue. A project may keep deliberate fake
+   secrets in test fixtures: mark such lines `devteam-scan: ignore` rather than scanning less.
 6. HAND OVER (gate 2, the production deploy). Only when steps 1-5 are done, the tree is clean, and the protected-paths
    check shows nothing the boss has not approved. Commit the backlog and report first so HEAD is final. Ask the deployer
    in mode PREPARE. Then stop and wait: set the task to "waiting for the boss to deploy" and tell the boss in the session

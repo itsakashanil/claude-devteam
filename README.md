@@ -60,7 +60,7 @@ every time; the guard hook reads its fenced `devteam-profile` block. Without a p
 After each task the manager writes `docs/reports/YYYY-MM-DD-<task>.md` (goal, plan, files with a one-line purpose, decisions and rejected
 alternatives, tests, review findings and fixes, security gates, deploy result and rollback point, open items, learning notes) and adds a row
 to `docs/reports/INDEX.md`. Reports must contain no secrets, tokens, chat IDs or personal data; the manager runs `secret_scan.py` over them
-before handing over, and you should run it before every push: `python3 <plugin>/scripts/secret_scan.py`.
+before handing over, and you should run it before every push: `python3 <plugin>/scripts/secret_scan.py` (whole project) or with paths, for example `docs/reports`. Test fixtures with deliberately fake secrets can be marked with a trailing `devteam-scan: ignore`.
 
 ## Limits you should know
 - **Guardrails, not a sandbox.** Permission rules and the hook catch mistakes and prompt injection; a script an agent writes can still do
