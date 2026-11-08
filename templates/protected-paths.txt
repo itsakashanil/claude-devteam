@@ -1,0 +1,9 @@
+# Security-sensitive code: changes here need the boss's approval (gate 3).
+# Glob patterns against repo-relative paths; ** matches any depth. Keep the matching Edit(...) "ask" rules in
+# .claude/settings.json in step with this list (the plugin's init command prints them for you).
+#
+# Examples (replace with your own):
+# src/config/**
+# src/auth/**
+# deploy/**
+CLAUDE.md

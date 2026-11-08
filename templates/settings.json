@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Read(/**)",
+      "Edit(/**)"
+    ],
+    "ask": [
+      "Edit(/CLAUDE.md)"
+    ],
+    "deny": [
+      "Edit(/.claude/**)",
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push --delete*)",
+      "Bash(git push --mirror*)"
+    ]
+  }
+}

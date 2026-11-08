@@ -1,0 +1,15 @@
+{
+  "name": "devteam",
+  "version": "0.1.0",
+  "description": "A small AI dev team for any repo: manager, planner, builder, tester, reviewer and deployer agents, three approval gates, a Bash guard hook, and a written report per task.",
+  "author": {
+    "name": "Akash Anil"
+  },
+  "repository": "https://github.com/itsakashanil/claude-devteam",
+  "keywords": [
+    "agents",
+    "workflow",
+    "review",
+    "reports"
+  ]
+}

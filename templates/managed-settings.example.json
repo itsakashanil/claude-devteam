@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Edit(//ABSOLUTE/PATH/TO/PROJECT/.claude/**)",
+      "Read(//ABSOLUTE/PATH/TO/SECRETS/**)"
+    ],
+    "ask": [
+      "Edit(//ABSOLUTE/PATH/TO/PROJECT/CLAUDE.md)"
+    ]
+  }
+}

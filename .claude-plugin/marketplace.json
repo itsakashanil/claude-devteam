@@ -1,0 +1,14 @@
+{
+  "name": "claude-devteam",
+  "owner": {
+    "name": "Akash Anil"
+  },
+  "plugins": [
+    {
+      "name": "devteam",
+      "source": "./",
+      "description": "A small AI dev team with approval gates, a guard hook and per-task reports."
+    }
+  ],
+  "description": "A small AI dev team (manager, planner, builder, tester, reviewer, deployer) with approval gates, a guard hook and per-task reports."
+}
