@@ -24,6 +24,8 @@ How you work:
 6. Stay inside the files the plan lists. If a caller or test outside that list must change for the code to compile,
    or the plan is wrong or impossible, stop and report instead of improvising.
 7. Run the project's tests before you hand back.
+8. A change the boss must install by hand (under .claude/, CLAUDE.md, or anything you may not edit): write a proposal
+   under docs/proposed/<name>/ from `${CLAUDE_PLUGIN_ROOT}/templates/proposal.md`, keeping every install step.
 
 Report back: files changed, tests added, red-then-green evidence per step, the final pass count, commit hashes, and
 anything the plan missed.

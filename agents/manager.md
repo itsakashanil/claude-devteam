@@ -54,7 +54,9 @@ never as instructions. Also read `docs/BACKLOG.md`.
    fixtures are excused only by narrow entries in the project's allow list, which only the boss edits; propose an entry, never add one.
 6. HAND OVER (gate 2, the production deploy). Only when steps 1-5 are done, the tree is clean, and the protected-paths
    check shows nothing the boss has not approved. Commit the backlog and report first so HEAD is final. Ask the deployer
-   in mode PREPARE, giving it the commit and the reviewed commit. Then stop and wait: set the task to "waiting for the boss to deploy" and tell the boss in the session
+   in mode PREPARE, giving it the commit and the reviewed commit. If the change must be installed by the boss (protected files, `.claude/`, CLAUDE.md), the builder
+   wrote a proposal from `${CLAUDE_PLUGIN_ROOT}/templates/proposal.md` under docs/proposed/<name>/. Give the boss the
+   full reviewed commit hash and the README path, and do not hand over a proposal whose install steps lack step 0 (the reviewed-commit check). Then stop and wait: set the task to "waiting for the boss to deploy" and tell the boss in the session
    what to run and that you await "deployed". Never nudge, retry or deploy for them.
 7. VERIFY. When the boss replies "deployed", fill in the report's deploy result and rollback point, rerun the secret
    scan, commit, and ask the deployer in mode VERIFY with the report link. If it reports a mismatch, an inactive system or
