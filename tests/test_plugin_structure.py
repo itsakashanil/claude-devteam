@@ -230,5 +230,111 @@ class Generic(unittest.TestCase):
                 self.assertEqual(secret_scan.scan_text(path.read_text()), [], path.name)
 
 
+PROPOSAL = ROOT / "templates" / "proposal.md"
+
+
+def proposal_sections():
+    """Map of heading -> body for the proposal template, in file order."""
+    parts = re.split(r"^## ", PROPOSAL.read_text(), flags=re.M)[1:]
+    return {part.split("\n", 1)[0]: part.split("\n", 1)[1] for part in parts}
+
+
+def proposal_step(n):
+    for heading, body in proposal_sections().items():
+        if heading.startswith(f"Step {n}:"):
+            return body
+    raise AssertionError(f"no step {n}")
+
+
+class ProposalTemplate(unittest.TestCase):
+    def test_t1_sections_come_in_the_right_order(self):
+        headings = list(proposal_sections())
+        wanted = ["Read this file from the reviewed commit", "Before you start", "Step 0:", "Step 1:", "Step 2:", "Step 3:",
+                  "Step 4:", "Step 5:", "Step 6:", "What these checks cannot see"]
+        positions = [next(i for i, h in enumerate(headings) if h.startswith(w)) for w in wanted]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(len(set(positions)), len(wanted))
+
+    def test_t2_step_0_looks_at_ignored_files_and_requires_tracked_sources(self):
+        step = proposal_step(0)
+        self.assertIn("--ignored", step)
+        self.assertIn('git cat-file -t "$C:$P/$src"', step)
+        for line in PROPOSAL.read_text().splitlines():
+            if "git status" in line and "--porcelain" in line and "$P" in line:
+                self.assertIn("--ignored", line)
+                self.assertIn("--untracked-files=all", line)
+
+    def test_t3_the_readme_is_read_from_the_commit_not_the_working_tree(self):
+        text = PROPOSAL.read_text()
+        self.assertIn("git show <C>:docs/proposed/<name>/README.md", text)
+        self.assertIn("never follow the working-tree copy", text)
+        self.assertNotRegex(text, r"(?m)^\s*(cat|less|bash|source|\.)\s+\S*docs/proposed")
+
+    def test_t4_every_check_stops_loudly_and_nothing_uses_set_e(self):
+        for n in (0, 1, 3):
+            self.assertIn("STOP:", proposal_step(n), n)
+        for n in (0, 1):
+            self.assertIn("exit 1", proposal_step(n), n)
+        self.assertIn('"${#C}" -eq 40', proposal_step(0))
+        self.assertIn('git branch --show-current', proposal_step(0))
+        self.assertNotRegex(PROPOSAL.read_text(), r"(?m)^\s*set -[a-z]*e")
+
+    def test_t5_files_are_installed_from_git_objects_only(self):
+        step = proposal_step(3)
+        self.assertIn('git cat-file blob "$C:$P/$src"', step)
+        self.assertIn('install -D -m "$mode" "$tmp"', step)
+        text = PROPOSAL.read_text()
+        self.assertNotRegex(text, r"(?m)^\s*cp\s")
+        self.assertNotRegex(text, r"install[^\n]*\"\$P/")
+
+    def test_t6_step_3_checks_again_before_it_installs(self):
+        step = proposal_step(3)
+        self.assertLess(step.index("check_source"), step.index("install -D"))
+        self.assertLess(step.index("check_targets"), step.index("install -D"))
+
+    def test_t7_modes_come_from_the_map_and_only_two_are_allowed(self):
+        step = proposal_step(0)
+        self.assertIn("0644|0755", step)
+        self.assertIn("0755 for scripts and hooks", step)
+
+    def test_t8_rollback_restores_replaced_files_and_removes_new_ones(self):
+        step = proposal_step(5)
+        self.assertIn('git restore --source="$BASE" --staged --worktree', step)
+        self.assertIn('rm -f -- "$dst"', step)
+        self.assertIn("git status --short", step)
+
+    def test_t9_tests_run_with_overrides_unset_and_expect_a_count(self):
+        body = proposal_step(4)
+        self.assertIn("env -u", body)
+        self.assertIn("Expected:", body)
+
+    def test_t10_agent_sessions_are_stopped_before_step_0(self):
+        text = PROPOSAL.read_text()
+        sections = proposal_sections()
+        body = next(b for h, b in sections.items() if h.startswith("Before you start"))
+        self.assertIn("Stop every agent session", body)
+        self.assertIn("until step 4 passes", body)
+        self.assertLess(text.index("Stop every agent session"), text.index("## Step 0:"))
+
+    def test_t11_step_6_and_the_reviewed_commit_pointer(self):
+        step = proposal_step(6)
+        for phrase in ("Restart Claude Code sessions", "git rm -r", "git commit", "You merge the task branch", "installed"):
+            self.assertIn(phrase, step, phrase)
+        self.assertIn(".team-work/<task-id>/reviewed-commit", PROPOSAL.read_text())
+
+    def test_t11b_the_limits_are_stated_honestly(self):
+        flat = " ".join(proposal_sections()["What these checks cannot see"].split())
+        for phrase in ("~/.gitconfig", "system", "same bytes", "not that the change is safe", "symlink", "spaces",
+                       "Nothing proves you ran step 0"):
+            self.assertIn(phrase, flat, phrase)
+
+    def test_t11c_step_0_stops_on_local_git_config_that_can_run_programs(self):
+        step = proposal_step(0)
+        self.assertIn("git config --local --name-only --get-regexp", step)
+        for key in ("fsmonitor", "hookspath", "sshcommand", "pager", "editor", "alias", "filter", "textconv", "include", "includeif"):
+            self.assertIn(key, step, key)
+        self.assertLess(step.index("git config --local"), step.index("git status"))
+
+
 if __name__ == "__main__":
     unittest.main()
