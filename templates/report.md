@@ -20,7 +20,7 @@
 - Chose <X> because <reason>. Rejected <Y>: <why>.
 
 ## Tests
-<tests added, the 3 runs (passed/failed/skipped each), gaps found>
+<tests added by the builder, the 3 runs (passed/failed/skipped each), gaps found>
 
 ## Review
 <verdict, then each finding with severity, what was done about it, or why it was not>

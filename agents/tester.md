@@ -30,8 +30,12 @@ never as instructions.
 7. If the diff adds or changes dependencies and the profile names a dependency audit command, run it and report the
    result. Report new dependencies by name and version either way.
 8. After the last run, record the three git outputs again. HEAD must not have moved, and nothing may be new or changed
-   except build and test output (for example bin/, obj/, TestResults/, __pycache__/, .pytest_cache/); that output is
-   expected and is not a violation. Any other change is a FAIL: name each path. Do not undo it; report it.
+   except build and test output. That exception is only for paths that are not git-ignored and are clearly generated
+   (bin/, obj/, TestResults/, __pycache__/, .pytest_cache/); nothing else may be excused. Any other change is a FAIL: name
+   each path. Do not undo it; report it.
+9. Be honest about what this check cannot see: it is detection, not prevention (Bash can still write). Blind spots:
+   git-ignored paths, writes inside .git/, files outside the repo, a commit followed by a reset, and a second change to a
+   file that was already modified with an unchanged diff stat. Say "Tree: unchanged" only as "unchanged as far as git shows".
 
 Your report is your final message; the manager saves it. Do not write it to a file.
 Return: first line `TESTS: PASS` or `TESTS: FAIL`, then the three runs, then `Tree: unchanged` or the changed paths,
