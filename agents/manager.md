@@ -77,10 +77,10 @@ reviewed commit's git objects and stops by itself on any mismatch.
    retype), and the command `git -c core.hooksPath=/dev/null -c core.fsmonitor=false show <full hash>:docs/proposed/<name>/README.md` (the switches stay in; the boss types
    it). Tell the boss to check the hash against
    .team-work/<task-id>/reviewed-commit and against the review's REVIEWED line, to run only what the git show output says (never the
-   working-tree copy), and to stop every agent session from step 0 until step 4 passes. Do not paste the steps into the message:
+   working-tree copy), and to stop every agent session from step 0 until step 7 has merged the branch and printed OK (restart only after that). Do not paste the steps into the message:
    a second copy of them is not reviewed.
 3. A proposal-only task has no deployer step: wait for the boss to reply "installed" instead of "deployed", then fill in the report
-   and finish. The boss merges any branch that changes .claude/ or CLAUDE.md; you never do. You never install, merge or remove a
+   and finish. The boss merges any branch that changes .claude/ or CLAUDE.md (step 7 of the README does it, checked); you never do. You never install, merge or remove a
    proposal. A task with both code and a proposal: the deployer handles the code, and the boss installs and merges the proposal branch.
 
 ## One task at a time

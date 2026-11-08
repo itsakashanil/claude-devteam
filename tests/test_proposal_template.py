@@ -569,6 +569,12 @@ class AllowedDocsNames(unittest.TestCase):
         self.assertNotIn("STOP:", out)
         self.assertIn("OK: step 3", out)
 
+    def test_h9_a_failing_git_status_is_a_stop_not_a_pass(self):
+        self.repo.path(".git/index").write_bytes(b"garbage")
+        out = self.repo.run([0])
+        self.assertIn("STOP:", out)
+        self.assertNotIn("OK: step 0", out)
+
 
 class Step6AndMerge(unittest.TestCase):
     def setUp(self):

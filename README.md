@@ -62,8 +62,9 @@ Anything under `.claude/`, `CLAUDE.md` or permission settings is delivered by th
 `templates/proposal.md`. You read that README from the reviewed commit (`git -c core.hooksPath=/dev/null -c core.fsmonitor=false show <full hash>:docs/proposed/<name>/README.md`), never from the working tree.
 Its steps check that the folder is exactly the reviewed commit (nothing ignored or untracked, no later edits), that the targets are unchanged since the
 commit they were built on, and that the local git config sets nothing that runs programs; then they install each file from git's stored copy of the reviewed commit,
-run the tests, and can roll back. The reviewer quotes the full reviewed hash on line 2 of its review (`REVIEWED: <hash>`); compare it with the hand-over message.
-A proposal-only task has no deployer step: you reply "installed" and you merge the branch yourself.
+run the tests, and can roll back. Keep every agent session stopped until step 7 (a checked commit and merge into main) prints OK; step 6 and step 7 recheck
+the branch, the config and main before they act. Linux, bash and GNU coreutils only. The reviewer quotes the full reviewed hash on line 2 of its review (`REVIEWED: <hash>`); compare it with the hand-over message.
+A proposal-only task has no deployer step: you reply "installed" after step 7 has merged the branch.
 
 ## Reports
 After each task the manager writes `docs/reports/YYYY-MM-DD-<task>.md` (goal, plan, files with a one-line purpose, decisions and rejected
@@ -85,7 +86,8 @@ before handing over, and you should run it before every push: `python3 <plugin>/
   fakes in test fixtures are excused by `.claude/secret-scan-allow.txt` (`<glob> <kind>` per line, only that kind, only those files; an entry
   with no kind is ignored). Only you edit that file.
 - **Proposal checks prove "same bytes", not "safe".** Every git call in the template runs with hooks and fsmonitor off, and the checks stop if HEAD or the
-  working tree differs from the reviewed commit (reports and backlog excepted). They read only common program-running keys in `.git/config`: not
+  working tree differs from the reviewed commit, except for exactly `docs/BACKLOG.md` and `docs/reports/<name>.md` (one `.md` file directly in `docs/reports`, the only
+  files the manager writes after review; a `conftest.py` or `test_*.py` there, or a subfolder, is a STOP because test runners load code by those names). They read only common program-running keys in `.git/config`: not
   config.worktree, diff/merge drivers, `pager.<cmd>`, `gpg.program`, GIT_* variables, `~/.gitconfig` or the system config. Your own shell (PATH, `~/.bashrc`,
   aliases) and the installed plugin copy of the template are writable by the agents. They cannot see a symlinked parent directory of a target or prove you
   ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
