@@ -30,10 +30,11 @@ class Repo:
         self.dir = self.tmp / "repo"
         self.dir.mkdir()
         (self.tmp / "home").mkdir()
+        (self.tmp / "tmpdir").mkdir()
         self.env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp / "home"), "GIT_CONFIG_NOSYSTEM": "1",
-                    "GIT_CONFIG_GLOBAL": "/dev/null", "PAGER": "cat", "LC_ALL": "C",
-                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+                    "GIT_CONFIG_GLOBAL": "/dev/null", "PAGER": "cat", "LC_ALL": "C", "TMPDIR": str(self.tmp / "tmpdir"),
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
         self.git("init", "-q", "-b", "main")
         self.write(".gitignore", "ignored.txt\n")
         self.write(".claude/agents/old.md", "old\n", base_mode)
@@ -64,7 +65,7 @@ class Repo:
     def path(self, rel):
         return self.dir / rel
 
-    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None, test_cmd="true"):
+    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None, test_cmd="true", interrupt_step_2=False):
         """Run the filled-in blocks of the given steps in one bash process, like the boss's terminal."""
         step0 = block(0)
         values = {"C": c or self.c, "BASE": base or self.base, "B": branch, "P": P}
@@ -76,7 +77,8 @@ class Repo:
             if n == 0:
                 pieces.append(step0)
             elif n == 2:
-                pieces.append(block(2).replace("| less", "| cat"))
+                viewer = "| sh -c 'kill -TERM $PPID'" if interrupt_step_2 else "| cat"
+                pieces.append(block(2).replace("| less", viewer))
             elif n == 4:
                 pieces.append(re.sub(r"(?m)^env -u .*$", lambda _m: test_cmd, block(4)))
             else:
@@ -85,6 +87,10 @@ class Repo:
                 pieces.append(between[1])
         done = subprocess.run(["bash", "-c", "\n".join(pieces)], cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=60)
         return done.stdout + done.stderr
+
+    def leftovers(self):
+        """Files left in the TMPDIR the steps used."""
+        return sorted(p.name for p in (self.tmp / "tmpdir").iterdir())
 
     def mode(self, rel):
         return stat.S_IMODE(self.path(rel).stat().st_mode)
@@ -141,8 +147,9 @@ class ProposalBehaviour(unittest.TestCase):
     def test_b5_a_map_entry_that_is_not_a_tracked_file_stops_it(self):
         for src in ("ignored.txt", "missing.md", "../../../.gitignore", "."):
             with self.subTest(src=src):
-                out = self.repo.run([0, 3], map_=f"0644 {src} .claude/agents/x.md")
+                out = self.repo.run([0, 1, 3], map_=f"0644 {src} .claude/agents/x.md")
                 self.assertStopsWithNothingInstalled(out)
+                self.assertTrue("not a file tracked" in out or "unsafe source path" in out, out)
                 self.assertFalse(self.repo.path(".claude/agents/x.md").exists())
 
     def test_b5b_the_message_names_the_untracked_source(self):
@@ -167,16 +174,25 @@ class ProposalBehaviour(unittest.TestCase):
         out = self.repo.run([0, 1, 3], c=other)
         self.assertStopsWithNothingInstalled(out, "does not contain")
 
-    def test_b7_dangerous_targets_and_modes_stop_it(self):
+    def test_b7_dangerous_targets_and_modes_stop_it_with_the_right_reason(self):
         outside = self.repo.tmp / "outside.md"
-        for line in ("0644 old.md ../escape.md", f"0644 old.md {outside}", "0644 old.md .git/hooks/pre-commit",
-                     "0777 old.md .claude/agents/x.md", "4755 tool.sh .claude/agents/x.md", "0644 old.md a b c"):
+        cases = {"0644 old.md ../escape.md": "unsafe target", f"0644 old.md {outside}": "unsafe target",
+                 "0644 old.md .git/hooks/pre-commit": "unsafe target", "0644 old.md ./.git/hooks/pre-commit": "unsafe target",
+                 "0644 old.md a/./b": "unsafe target", "0644 old.md a/.": "unsafe target", "0644 old.md -rf": "unsafe target",
+                 "0644 old.md .claude/a$b": "unsafe target", "0644 old.md .claude/a;b": "unsafe target",
+                 "0644 old.md .claude/*.md": "unsafe target", "0644 old.md .claude//x": "unsafe target",
+                 "0644 old.md .claude/x/": "unsafe target", "0644 old.md sub/.git/x": "unsafe target",
+                 "0644 -x .claude/agents/x.md": "unsafe source path", "0644 ../old.md .claude/agents/x.md": "unsafe source path",
+                 "0777 old.md .claude/agents/x.md": "mode 0777", "4755 tool.sh .claude/agents/x.md": "mode 4755",
+                 "0644 old.md a b c": "bad MAP line"}
+        for line, reason in cases.items():
             with self.subTest(line=line):
-                out = self.repo.run([0, 3], map_=line)
-                self.assertStopsWithNothingInstalled(out)
+                out = self.repo.run([0, 1, 3], map_=line)
+                self.assertStopsWithNothingInstalled(out, reason)
         self.assertFalse(outside.exists())
         self.assertFalse((self.repo.tmp / "escape.md").exists())
         self.assertFalse(self.repo.path(".git/hooks/pre-commit").exists())
+        self.assertFalse(self.repo.path("-rf").exists())
 
     def test_b8_targets_that_changed_since_base_stop_it(self):
         with self.subTest("edited in the working tree"):
@@ -223,10 +239,9 @@ class ProposalBehaviour(unittest.TestCase):
     def test_b10_rollback_restores_content_and_mode_removes_new_files_and_leaves_a_clean_status(self):
         repo = Repo(base_mode=0o755)
         self.addCleanup(repo.close)
-        out = repo.run([0, 1, 3])
+        out = repo.run([0, 1, 3, 5], between=(3, "test $(stat -c %a .claude/agents/old.md) = 644 || echo MODE-NOT-INSTALLED"))
         self.assertIn("OK: step 3", out)
-        self.assertEqual(repo.mode(".claude/agents/old.md"), 0o644)
-        out = repo.run([0, 5])
+        self.assertNotIn("MODE-NOT-INSTALLED", out)
         self.assertEqual(repo.path(".claude/agents/old.md").read_text(), "old\n")
         self.assertTrue(repo.mode(".claude/agents/old.md") & 0o100, "the executable bit comes back")
         self.assertFalse(repo.path(".claude/scripts/new/tool.sh").exists())
@@ -234,10 +249,12 @@ class ProposalBehaviour(unittest.TestCase):
         self.assertNotIn("STOP:", out)
 
     def test_b10b_rollback_after_an_install_that_stopped_part_way(self):
-        # the second file cannot be installed because its parent directory is a file: step 3 stops after the first
-        self.repo.write(".claude/scripts", "i am a file\n")
-        self.repo.git("add", "-A")
-        self.repo.git("commit", "-q", "-m", "squat")
+        # the second file cannot be installed because its parent directory is read-only: step 3 stops after the first
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        self.repo.path(".claude/scripts").mkdir(parents=True)
+        self.repo.path(".claude/scripts").chmod(0o555)
+        self.addCleanup(self.repo.path(".claude/scripts").chmod, 0o755)
         out = self.repo.run([0, 1, 3])
         self.assertIn("installed .claude/agents/old.md", out)
         self.assertIn("STOP: install stopped part-way; run step 5", out)
@@ -245,6 +262,7 @@ class ProposalBehaviour(unittest.TestCase):
         self.repo.run([0, 5])
         self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
         self.assertEqual(self.repo.git("status", "--short"), "")
+        self.assertEqual(self.repo.leftovers(), [], "step 3 left its temp file behind")
 
     def test_b11_local_git_config_that_can_run_programs_stops_it(self):
         keys = {"alias.x": "status", "core.fsmonitor": "false", "core.hooksPath": "/nonexistent", "core.sshCommand": "ssh",
@@ -259,10 +277,10 @@ class ProposalBehaviour(unittest.TestCase):
         # the same repository passes once the settings are gone
         self.assertIn("OK: step 3", self.repo.run([0, 1, 3]))
 
-    def test_b11b_the_test_repo_does_not_read_this_machines_git_config(self):
-        self.assertEqual(self.repo.env["GIT_CONFIG_GLOBAL"], "/dev/null")
-        self.assertEqual(self.repo.env["GIT_CONFIG_NOSYSTEM"], "1")
-        self.assertEqual(self.repo.git("config", "--global", "--list"), "")
+    def test_b11b_the_test_repo_reads_no_git_config_outside_its_own(self):
+        listing = self.repo.git("config", "--list", "--show-origin")
+        origins = {line.split("\t")[0] for line in listing.splitlines()}
+        self.assertEqual(origins, {"file:.git/config"})
 
 
 class GitProgramsStayOff(unittest.TestCase):
@@ -300,6 +318,184 @@ class GitProgramsStayOff(unittest.TestCase):
         out = self.repo.run([0, 1, 3, 5])
         self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
         self.assertFalse(self.marker.exists(), out)
+
+
+class MainMoved(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def on_main(self, rel, text):
+        self.repo.git("checkout", "-q", "main")
+        self.repo.write(rel, text)
+        self.repo.git("add", "-A")
+        self.repo.git("commit", "-q", "-m", "main moves")
+        self.repo.git("checkout", "-q", BRANCH)
+
+    def test_c1_a_replaced_target_edited_on_main_after_base_stops_it(self):
+        self.on_main(".claude/agents/old.md", "edited on main\n")
+        out = self.repo.run([0, 1, 3])
+        self.assertIn("changed on main since BASE", out)
+        self.assertNotIn("installed ", out)
+        self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
+        self.assertFalse(self.repo.path(".claude/scripts/new/tool.sh").exists())
+
+    def test_c2_a_new_target_created_on_main_after_base_stops_it(self):
+        self.on_main(".claude/scripts/new/tool.sh", "created on main\n")
+        self.assertFalse(self.repo.path(".claude/scripts/new/tool.sh").exists(), "not on this branch")
+        out = self.repo.run([0, 1, 3])
+        self.assertIn("exists on main", out)
+        self.assertNotIn("installed ", out)
+        self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
+
+    def test_c3_a_replaced_target_deleted_on_main_stops_it(self):
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("rm", "-q", ".claude/agents/old.md")
+        self.repo.git("commit", "-q", "-m", "gone")
+        self.repo.git("checkout", "-q", BRANCH)
+        self.assertIn("changed on main since BASE", self.repo.run([0, 1, 3]))
+
+    def test_c4_main_moving_elsewhere_does_not_stop_it(self):
+        self.on_main("unrelated.txt", "x\n")
+        self.assertIn("OK: step 3", self.repo.run([0, 1, 3]))
+
+
+class VerifyAndFinish(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def test_b1_verify_passes_after_a_clean_install(self):
+        out = self.repo.run([0, 1, 3, 4])
+        self.assertIn("OK: installed files match the reviewed commit", out)
+        self.assertNotIn("STOP:", out)
+
+    def test_b2_an_edit_to_an_installed_file_after_step_3_stops_step_4(self):
+        out = self.repo.run([0, 1, 3, 4], between=(3, "echo tampered >> .claude/agents/old.md"))
+        self.assertIn("STOP: .claude/agents/old.md is not the reviewed content", out)
+        self.assertNotIn("OK: installed files", out)
+
+    def test_b3_a_mode_change_after_step_3_stops_step_4(self):
+        out = self.repo.run([0, 1, 3, 4], between=(3, "chmod 0755 .claude/agents/old.md"))
+        self.assertIn("STOP: .claude/agents/old.md has mode 755, expected 644", out)
+
+    def test_b4_a_symlink_swapped_in_after_step_3_stops_step_4(self):
+        out = self.repo.run([0, 1, 3, 4], between=(3, "cp .claude/agents/old.md ../same.md; rm .claude/agents/old.md; ln -s ../../../same.md .claude/agents/old.md"))
+        self.assertIn("STOP: .claude/agents/old.md is a symlink", out)
+
+    def test_b5_an_empty_file_where_a_target_should_be_stops_verify(self):
+        out = self.repo.run([0, 1, 3, 4], between=(3, ": > .claude/agents/old.md"))
+        self.assertIn("is not the reviewed content", out)
+
+    def test_d1_step_6_commits_the_installed_files_and_removes_the_proposal(self):
+        out = self.repo.run([0, 1, 3, 4, 6])
+        self.assertNotIn("STOP:", out)
+        self.assertIn("OK: step 6", out)
+        self.assertEqual(self.repo.git("log", "-1", "--format=%s").strip(), f"Install demo (reviewed {self.repo.c})")
+        files = self.repo.git("show", "--no-renames", "--name-status", "--format=", "HEAD").split("\n")
+        self.assertIn("M\t.claude/agents/old.md", files)
+        self.assertIn("A\t.claude/scripts/new/tool.sh", files)
+        self.assertIn(f"D\t{P}/README.md", files)
+        self.assertFalse(self.repo.path(P).exists())
+        self.assertEqual(self.repo.git("status", "--short"), "")
+
+    def test_d2_step_6_verifies_again_and_commits_nothing_after_a_late_edit(self):
+        head = self.repo.git("rev-parse", "HEAD")
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, "echo late >> .claude/agents/old.md"))
+        self.assertIn("is not the reviewed content", out)
+        self.assertNotIn("OK: step 6", out)
+        self.assertEqual(self.repo.git("rev-parse", "HEAD"), head)
+        self.assertTrue(self.repo.path(P).exists())
+
+    def test_d3_step_6_stops_when_something_else_is_already_staged(self):
+        head = self.repo.git("rev-parse", "HEAD")
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, "echo x > other.txt; git add other.txt"))
+        self.assertIn("STOP:", out)
+        self.assertNotIn("OK: step 6", out)
+        self.assertEqual(self.repo.git("rev-parse", "HEAD"), head)
+
+    def test_d4_a_failing_commit_is_a_stop_not_a_success(self):
+        # an unwritable index lock makes git add fail: step 6 must say STOP and not claim success
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, "mkdir .git/index.lock"))
+        self.assertIn("STOP:", out)
+        self.assertNotIn("OK: step 6", out)
+
+    def test_d5_the_boss_is_told_to_restart_sessions_only_after_the_commit(self):
+        out = self.repo.run([0, 1, 3, 4, 6])
+        self.assertIn("restart", out.lower())
+        self.assertGreater(out.lower().index("restart"), out.index("OK: step 6"))
+
+    def test_b6_head_past_the_reviewed_commit_with_code_changes_stops_step_0(self):
+        self.repo.write("tests/test_x.py", "print('evil')\n")
+        self.repo.git("add", "-A")
+        self.repo.git("commit", "-q", "-m", "after review")
+        out = self.repo.run([0, 1, 3])
+        self.assertIn("differs from the reviewed commit outside", out)
+        self.assertNotIn("installed ", out)
+
+    def test_b7_an_untracked_or_modified_file_outside_the_proposal_stops_step_0(self):
+        for name, setup in {"untracked": lambda: self.repo.write("evil_test.py", "x\n"),
+                            "modified": lambda: self.repo.write(".gitignore", "changed\n")}.items():
+            with self.subTest(name):
+                setup()
+                out = self.repo.run([0, 1, 3])
+                self.assertIn("outside the reviewed commit", out)
+                self.assertNotIn("installed ", out)
+                self.repo.path("evil_test.py").unlink(missing_ok=True)
+                self.repo.write(".gitignore", "ignored.txt\n")
+
+    def test_b8_backlog_and_reports_may_change_after_review(self):
+        self.repo.write("docs/BACKLOG.md", "edited\n")
+        self.repo.write("docs/reports/r.md", "report\n")
+        out = self.repo.run([0, 1, 3, 4])
+        self.assertIn("OK: installed files match", out)
+
+
+class RollbackOnlyUndoesWhatWasInstalled(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def test_f1_a_new_target_that_already_existed_is_left_alone(self):
+        self.repo.write(".claude/scripts/new/tool.sh", "squatter, not ours\n")
+        out = self.repo.run([0, 1, 3, 5])
+        self.assertIn("should be new but already exists", out)
+        self.assertEqual(self.repo.path(".claude/scripts/new/tool.sh").read_text(), "squatter, not ours\n")
+        self.assertIn("left alone", out)
+
+    def test_f2_a_file_edited_by_hand_after_the_install_is_left_alone(self):
+        out = self.repo.run([0, 1, 3, 5], between=(3, "echo mine >> .claude/agents/old.md"))
+        self.assertIn("left alone", out)
+        self.assertIn("mine", self.repo.path(".claude/agents/old.md").read_text())
+        self.assertFalse(self.repo.path(".claude/scripts/new/tool.sh").exists(), "the installed new file is removed")
+
+    def test_f3_the_rollback_with_nothing_installed_changes_nothing(self):
+        out = self.repo.run([0, 5])
+        self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
+        self.assertNotIn("STOP:", out)
+        self.assertEqual(self.repo.git("status", "--short"), "")
+
+    def test_f4_step_5_refuses_unsafe_map_lines(self):
+        out = self.repo.run([0, 5], map_="0644 old.md ./.git/hooks/pre-commit")
+        self.assertIn("STOP:", out)
+
+
+class TempFilesAreRemoved(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def test_g1_step_2_removes_its_temp_directory_normally(self):
+        self.repo.run([0, 1, 2])
+        self.assertEqual(self.repo.leftovers(), [])
+
+    def test_g2_step_2_removes_its_temp_directory_when_interrupted(self):
+        self.repo.run([0, 1, 2], interrupt_step_2=True)
+        self.assertEqual(self.repo.leftovers(), [])
+
+    def test_g3_step_3_leaves_no_temp_file_after_a_successful_install(self):
+        self.repo.run([0, 1, 3])
+        self.assertEqual(self.repo.leftovers(), [])
 
 
 if __name__ == "__main__":

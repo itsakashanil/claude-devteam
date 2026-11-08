@@ -327,7 +327,7 @@ class ProposalTemplate(unittest.TestCase):
     def test_t5_files_are_installed_from_git_objects_only(self):
         step = proposal_step(3)
         self.assertIn('g cat-file blob "$C:$P/$src"', step)
-        self.assertIn('install -D -m "$mode" "$tmp"', step)
+        self.assertIn('install -D -m "$mode" -- "$tmp"', step)
         text = PROPOSAL.read_text()
         self.assertNotRegex(text, r"(?m)^\s*cp\s")
         self.assertNotRegex(text, r"install[^\n]*\"\$P/")
@@ -363,14 +363,51 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t11_step_6_and_the_reviewed_commit_pointer(self):
         step = proposal_step(6)
-        for phrase in ("Restart Claude Code sessions", "g rm -r", "g commit", "You merge the task branch", "installed"):
+        for phrase in ("verify_installed", "g rm -r", "g commit", "--no-gpg-sign", "You merge the task branch", "installed",
+                       "STOP:", GIT_FLAGS + " checkout main", GIT_FLAGS + ' merge --no-ff "$B"'):
             self.assertIn(phrase, step, phrase)
+        self.assertLess(step.index("g commit"), step.index("restart your Claude Code sessions"))
+        self.assertLess(step.index("verify_installed"), step.index("g add"))
         self.assertIn(".team-work/<task-id>/reviewed-commit", PROPOSAL.read_text())
+
+    def test_b_verify_installed_runs_after_step_4_and_in_step_6(self):
+        self.assertIn("verify_installed() (", proposal_step(0))
+        self.assertIn('cmp -s -- - "$dst"', proposal_step(0))
+        self.assertIn('stat -c %a', proposal_step(0))
+        for n in (4, 6):
+            self.assertIn("verify_installed", proposal_step(n), n)
+
+    def test_c_step_1_checks_main_for_replaced_and_new_targets(self):
+        step = proposal_step(1)
+        self.assertIn('g diff --quiet "$BASE" "$MAIN" -- "$dst"', step)
+        self.assertIn('! g cat-file -e "$MAIN:$dst"', step)
+
+    def test_e_option_like_paths_are_refused_and_commands_end_options(self):
+        text = PROPOSAL.read_text()
+        for pattern in ("-*", "./*", "*/./*", "*/.", "A-Za-z0-9._/-"):
+            self.assertIn(pattern, proposal_step(0), pattern)
+        for command in ('install -D -m "$mode" --', 'diff -u -- "$dst"', 'rm -f -- "$dst"', "cmp -s --"):
+            self.assertIn(command, text, command)
+
+    def test_f_rollback_checks_a_file_is_the_installed_one_before_touching_it(self):
+        step = proposal_step(5)
+        self.assertIn('cmp -s -- - "$dst"', step)
+        self.assertIn("left alone", step)
+        self.assertLess(step.index("cmp -s"), step.index("rm -f --"))
+        self.assertNotIn("installs nothing", PROPOSAL.read_text())
+
+    def test_g_temp_files_are_removed_by_traps(self):
+        for n in (2, 3):
+            self.assertIn("trap '", proposal_step(n), n)
+        self.assertIn("EXIT", proposal_step(2))
 
     def test_t11b_the_limits_are_stated_honestly(self):
         flat = " ".join(proposal_sections()["What these checks cannot see"].split())
         for phrase in ("~/.gitconfig", "system", "same bytes", "not that the change is safe", "symlink", "spaces",
-                       "Nothing proves you ran step 0"):
+                       "Nothing proves you ran step 0", "config.worktree", "diff.<driver>.command", "diff.external",
+                       "merge.<driver>.driver", "pager.<command>", "gpg.program", "GIT_* environment variables", "common keys",
+                       ".git/config", "~/.bashrc", "PATH", "aliases", "installed plugin copy", "docs/reports", "docs/BACKLOG.md",
+                       "Git-ignored files outside the proposal folder"):
             self.assertIn(phrase, flat, phrase)
 
     def test_t11c_step_0_stops_on_local_git_config_that_can_run_programs(self):
