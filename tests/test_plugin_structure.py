@@ -96,6 +96,11 @@ class Agents(unittest.TestCase):
         for name, text in AGENTS.items():
             self.assertIn("covers only the exact\naction they approved", text, name)
 
+    def test_the_builder_report_lists_every_denial_and_whether_it_was_retried_another_way(self):
+        body = AGENTS["builder"]
+        for phrase in ("Denied", "retried another way", "Denied: none", "which rule or hook"):
+            self.assertIn(phrase, body, phrase)
+
     def test_gate_3_needs_a_signed_off_security_impact_statement(self):
         self.assertIn("Security impact statement", AGENTS["planner"])
         self.assertIn("Security impact statement", AGENTS["reviewer"])
