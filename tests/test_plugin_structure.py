@@ -115,6 +115,32 @@ class Agents(unittest.TestCase):
         self.assertIn("whole-repo secret scan", text)
         self.assertIn("propose an entry, never add one", text)
 
+    def test_the_tester_runs_and_reads_but_cannot_edit(self):
+        fields = frontmatter(AGENTS["tester"])
+        self.assertEqual(set(re.split(r",\s*", fields["tools"])), {"Bash", "Glob", "Grep", "Read"})
+        for banned in ("Edit", "Write", "NotebookEdit"):
+            self.assertIn(banned, fields["disallowedTools"])
+        text = AGENTS["tester"]
+        for phrase in ("report the missing test for the builder", "git status --porcelain", "git rev-parse HEAD", "bin/"):
+            self.assertIn(phrase, text, phrase)
+        self.assertNotRegex(text, r"(?i)may add|add the test|extend tests")
+
+    def test_no_prompt_says_the_tester_adds_or_edits_tests(self):
+        pattern = re.compile(r"(?i)tester[^.\n]*\b(adds?|writes?|extends?|edits?)\b[^.\n]*tests?")
+        files = [p for folder in ("agents", "skills", "templates") for p in (ROOT / folder).rglob("*") if p.is_file()]
+        files.append(ROOT / "README.md")
+        for path in files:
+            self.assertIsNone(pattern.search(path.read_text()), str(path.relative_to(ROOT)))
+
+    def test_the_manager_saves_the_test_report_and_rechecks_the_tree(self):
+        text = AGENTS["manager"]
+        for phrase in ("test-report.md", "git rev-parse HEAD", "git status --porcelain", "missing test"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_the_readme_states_the_current_version(self):
+        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+        self.assertIn(f"v{plugin['version']}", (ROOT / "README.md").read_text())
+
     def test_the_licence_is_mit(self):
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
         self.assertEqual(plugin["license"], "MIT")
