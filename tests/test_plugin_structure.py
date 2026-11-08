@@ -246,7 +246,52 @@ def proposal_step(n):
     raise AssertionError(f"no step {n}")
 
 
+GIT_FLAGS = "-c core.hooksPath=/dev/null -c core.fsmonitor=false"
+GIT_HELPER = 'g() { command git ' + GIT_FLAGS + ' "$@"; }'
+GIT_AT_COMMAND_POSITION = re.compile(r"(?:^|[;&|({!]|\b(?:if|then|do|else|elif|while|until)\b|\$\()\s*(?:command\s+)?git\b(?P<rest>[^\n]*)")
+
+
+def unprotected_git_calls(text):
+    """Every git call in the text that does not carry the hook and fsmonitor switches: in bash blocks a call written
+    as `git` instead of the helper `g`, and in prose (inline code) any `git ...` without the flags."""
+    found = []
+    for fence in re.finditer(r"^```bash\n(.*?)^```", text, re.S | re.M):
+        for line in fence.group(1).splitlines():
+            if line.lstrip().startswith("#"):
+                continue
+            for call in GIT_AT_COMMAND_POSITION.finditer(line):
+                rest = call.group("rest")
+                after = re.sub(r"^\s*(--no-pager\s+)?", "", rest)
+                if not after.startswith(GIT_FLAGS):
+                    found.append(line.strip())
+    prose = re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
+    for span in re.findall(r"`([^`\n]+)`", prose):
+        if re.search(r"(?:^|[\s;&|(])git\s+[a-z-]", span) and GIT_FLAGS not in span:
+            found.append(span)
+    return found
+
+
 class ProposalTemplate(unittest.TestCase):
+    def test_a1_every_git_call_runs_with_hooks_and_fsmonitor_off(self):
+        text = PROPOSAL.read_text()
+        self.assertEqual(unprotected_git_calls(text), [])
+        blocks = re.findall(r"^```bash\n(.*?)^```", text, re.S | re.M)
+        self.assertGreaterEqual(len(blocks), 6)
+        for body in blocks:
+            self.assertEqual(body.splitlines()[0], GIT_HELPER)
+
+    def test_a2_the_unprotected_git_check_catches_planted_calls(self):
+        bare = "```bash\n" + GIT_HELPER + "\ngit status\n```\n"
+        self.assertEqual(unprotected_git_calls(bare), ["git status"])
+        nested = "```bash\nif git diff --quiet; then :; fi\nx=$(git log)\n! command git show\nfoo | git cat-file -e a\n```\n"
+        self.assertEqual(len(unprotected_git_calls(nested)), 4)
+        self.assertEqual(unprotected_git_calls("Run `git show abc:README.md | less`."), ["git show abc:README.md | less"])
+        self.assertEqual(unprotected_git_calls("Run `git " + GIT_FLAGS + " show abc`."), [])
+        self.assertEqual(unprotected_git_calls("```bash\n" + GIT_HELPER + "\ng status # git status\necho \"git config\"\n```\n"), [])
+
+    def test_a3_the_log_command_before_step_0_does_not_start_a_pager(self):
+        self.assertRegex(PROPOSAL.read_text(), r"`git --no-pager " + re.escape(GIT_FLAGS) + r" log ")
+
     def test_t1_sections_come_in_the_right_order(self):
         headings = list(proposal_sections())
         wanted = ["Read this file from the reviewed commit", "Before you start", "Step 0:", "Step 1:", "Step 2:", "Step 3:",
@@ -258,15 +303,15 @@ class ProposalTemplate(unittest.TestCase):
     def test_t2_step_0_looks_at_ignored_files_and_requires_tracked_sources(self):
         step = proposal_step(0)
         self.assertIn("--ignored", step)
-        self.assertIn('git cat-file -t "$C:$P/$src"', step)
+        self.assertIn('g cat-file -t "$C:$P/$src"', step)
         for line in PROPOSAL.read_text().splitlines():
-            if "git status" in line and "--porcelain" in line and "$P" in line:
+            if "g status" in line and "--porcelain" in line and "$P" in line:
                 self.assertIn("--ignored", line)
                 self.assertIn("--untracked-files=all", line)
 
     def test_t3_the_readme_is_read_from_the_commit_not_the_working_tree(self):
         text = PROPOSAL.read_text()
-        self.assertIn("git show <C>:docs/proposed/<name>/README.md", text)
+        self.assertIn("git " + GIT_FLAGS + " show <C>:docs/proposed/<name>/README.md", text)
         self.assertIn("never follow the working-tree copy", text)
         self.assertNotRegex(text, r"(?m)^\s*(cat|less|bash|source|\.)\s+\S*docs/proposed")
 
@@ -276,12 +321,12 @@ class ProposalTemplate(unittest.TestCase):
         for n in (0, 1):
             self.assertIn("exit 1", proposal_step(n), n)
         self.assertIn('"${#C}" -eq 40', proposal_step(0))
-        self.assertIn('git branch --show-current', proposal_step(0))
+        self.assertIn('g branch --show-current', proposal_step(0))
         self.assertNotRegex(PROPOSAL.read_text(), r"(?m)^\s*set -[a-z]*e")
 
     def test_t5_files_are_installed_from_git_objects_only(self):
         step = proposal_step(3)
-        self.assertIn('git cat-file blob "$C:$P/$src"', step)
+        self.assertIn('g cat-file blob "$C:$P/$src"', step)
         self.assertIn('install -D -m "$mode" "$tmp"', step)
         text = PROPOSAL.read_text()
         self.assertNotRegex(text, r"(?m)^\s*cp\s")
@@ -299,9 +344,9 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t8_rollback_restores_replaced_files_and_removes_new_ones(self):
         step = proposal_step(5)
-        self.assertIn('git restore --source="$BASE" --staged --worktree', step)
+        self.assertIn('g restore --source="$BASE" --staged --worktree', step)
         self.assertIn('rm -f -- "$dst"', step)
-        self.assertIn("git status --short", step)
+        self.assertIn("g status --short", step)
 
     def test_t9_tests_run_with_overrides_unset_and_expect_a_count(self):
         body = proposal_step(4)
@@ -318,7 +363,7 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t11_step_6_and_the_reviewed_commit_pointer(self):
         step = proposal_step(6)
-        for phrase in ("Restart Claude Code sessions", "git rm -r", "git commit", "You merge the task branch", "installed"):
+        for phrase in ("Restart Claude Code sessions", "g rm -r", "g commit", "You merge the task branch", "installed"):
             self.assertIn(phrase, step, phrase)
         self.assertIn(".team-work/<task-id>/reviewed-commit", PROPOSAL.read_text())
 
@@ -330,10 +375,10 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t11c_step_0_stops_on_local_git_config_that_can_run_programs(self):
         step = proposal_step(0)
-        self.assertIn("git config --local --name-only --get-regexp", step)
+        self.assertIn("g config --local --name-only --get-regexp", step)
         for key in ("fsmonitor", "hookspath", "sshcommand", "pager", "editor", "alias", "filter", "textconv", "include", "includeif"):
             self.assertIn(key, step, key)
-        self.assertLess(step.index("git config --local"), step.index("git status"))
+        self.assertLess(step.index("g config --local"), step.index("g status"))
 
 
     def test_t12_the_manager_hands_proposals_over_by_reference_and_never_installs_or_merges_them(self):

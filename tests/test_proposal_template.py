@@ -64,7 +64,7 @@ class Repo:
     def path(self, rel):
         return self.dir / rel
 
-    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None):
+    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None, test_cmd="true"):
         """Run the filled-in blocks of the given steps in one bash process, like the boss's terminal."""
         step0 = block(0)
         values = {"C": c or self.c, "BASE": base or self.base, "B": branch, "P": P}
@@ -77,6 +77,8 @@ class Repo:
                 pieces.append(step0)
             elif n == 2:
                 pieces.append(block(2).replace("| less", "| cat"))
+            elif n == 4:
+                pieces.append(re.sub(r"(?m)^env -u .*$", lambda _m: test_cmd, block(4)))
             else:
                 pieces.append(block(n))
             if between and n == between[0]:
@@ -261,6 +263,43 @@ class ProposalBehaviour(unittest.TestCase):
         self.assertEqual(self.repo.env["GIT_CONFIG_GLOBAL"], "/dev/null")
         self.assertEqual(self.repo.env["GIT_CONFIG_NOSYSTEM"], "1")
         self.assertEqual(self.repo.git("config", "--global", "--list"), "")
+
+
+class GitProgramsStayOff(unittest.TestCase):
+    """Hooks, and a core.fsmonitor program from the global config, must never run during the steps."""
+
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+        self.marker = self.repo.tmp / "marker"
+        script = self.repo.tmp / "evil.sh"
+        script.write_text(f"#!/bin/sh\necho \"$0 $*\" >> {self.marker}\nexit 0\n")
+        script.chmod(0o755)
+        for hook in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit", "post-merge", "post-checkout"):
+            self.repo.write(f".git/hooks/{hook}", f"#!/bin/sh\necho {hook} >> {self.marker}\n", 0o755)
+        config = self.repo.tmp / "global.cfg"
+        config.write_text(f"[core]\n\tfsmonitor = {script}\n")
+        self.repo.env["GIT_CONFIG_GLOBAL"] = str(config)
+
+    def test_the_planted_programs_do_run_when_git_is_called_bare(self):
+        # guards the test itself: with no protection the fsmonitor program and a hook both fire
+        subprocess.run(["git", "status"], cwd=self.repo.dir, env=self.repo.env, check=True, capture_output=True)
+        self.assertTrue(self.marker.exists(), "fsmonitor program did not run: the test proves nothing")
+        self.marker.unlink()
+        self.repo.write("x.txt", "x\n")
+        self.repo.git("add", "x.txt")
+        self.repo.git("commit", "-q", "-m", "x")
+        self.assertIn("pre-commit", self.marker.read_text())
+
+    def test_steps_0_to_4_run_no_hook_and_no_fsmonitor(self):
+        out = self.repo.run([0, 1, 2, 3, 4])
+        self.assertIn("OK: step 3", out)
+        self.assertFalse(self.marker.exists(), self.marker.read_text() if self.marker.exists() else "")
+
+    def test_the_rollback_runs_no_hook_and_no_fsmonitor(self):
+        out = self.repo.run([0, 1, 3, 5])
+        self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
+        self.assertFalse(self.marker.exists(), out)
 
 
 if __name__ == "__main__":
