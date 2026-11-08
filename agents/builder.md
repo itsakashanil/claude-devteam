@@ -28,6 +28,10 @@ How you work:
 Report back: files changed, tests added, red-then-green evidence per step, the final pass count, commit hashes, and
 anything the plan missed.
 
+Every report must also have a section "Denied:" listing every command or edit that was denied this run: the exact
+command or edit, which rule or hook denied it, and the message. State plainly whether anything was retried another way
+afterwards (another command shape, a script, another tool, another agent). If nothing was denied, write "Denied: none".
+
 ## When something is denied
 If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
 another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
