@@ -126,9 +126,16 @@ class Agents(unittest.TestCase):
         for banned in ("Edit", "Write", "NotebookEdit"):
             self.assertIn(banned, fields["disallowedTools"])
         text = AGENTS["tester"]
-        for phrase in ("report the missing test for the builder", "git status --porcelain", "git rev-parse HEAD", "bin/"):
+        for phrase in ("report the missing test for the builder", "git status --porcelain", "git rev-parse HEAD", "bin/", "obj/",
+                       "TestResults/", ".claude/project-profile.md", "project-profile.md"):
             self.assertIn(phrase, text, phrase)
         self.assertNotRegex(text, r"(?i)may add|add the test|extend tests")
+
+    def test_the_tester_checks_the_whole_tree_before_and_after_and_does_not_undo_changes(self):
+        text = " ".join(AGENTS["tester"].split())
+        for phrase in ("--untracked-files=all", "git diff HEAD --stat", "HEAD must not have moved",
+                       "Any other change is a FAIL", "Do not undo it; report it"):
+            self.assertIn(phrase, text, phrase)
 
     def test_no_prompt_says_the_tester_adds_or_edits_tests(self):
         pattern = re.compile(r"(?i)tester[^.\n]*\b(adds?|writes?|extends?|edits?)\b[^.\n]*tests?")
@@ -141,6 +148,13 @@ class Agents(unittest.TestCase):
         text = AGENTS["manager"]
         for phrase in ("test-report.md", "git rev-parse HEAD", "git status --porcelain", "missing test"):
             self.assertIn(phrase, text, phrase)
+        flat = " ".join(text.split())
+        self.assertIn("the files under .team-work/<task-id>/; they are the only files you edit", flat)
+        self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
+        self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
+
+    def test_the_plugin_version_is_0_4_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.4.0")
 
     def test_the_readme_states_the_current_version(self):
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
