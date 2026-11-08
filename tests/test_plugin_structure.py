@@ -336,5 +336,37 @@ class ProposalTemplate(unittest.TestCase):
         self.assertLess(step.index("git config --local"), step.index("git status"))
 
 
+    def test_t12_the_manager_hands_proposals_over_by_reference_and_never_installs_or_merges_them(self):
+        flat = " ".join(AGENTS["manager"].split())
+        for phrase in ("## Proposals the boss installs by hand", "${CLAUDE_PLUGIN_ROOT}/templates/proposal.md",
+                       "docs/proposed/<name>/README.md", "git show <full hash>:docs/proposed/<name>/README.md",
+                       "full 40-character", "reviewed-commit", "REVIEWED line", "stop every agent session",
+                       "until step 4 passes", "Do not paste the steps", "no deployer step", '"installed"',
+                       "never install, merge or remove a proposal", "merges any branch that changes .claude/ or CLAUDE.md",
+                       "refuse to hand over", "step 0", "ignored or untracked"):
+            self.assertIn(phrase, flat, phrase)
+
+    def test_t13_the_builder_builds_proposals_from_the_template_and_commits_every_file(self):
+        flat = " ".join(AGENTS["builder"].split())
+        for phrase in ("docs/proposed/<name>/", "${CLAUDE_PLUGIN_ROOT}/templates/proposal.md", "every placeholder except C",
+                       "BASE", "MAP", "expected test count", "commit every file", "nothing ignored or untracked",
+                       "never edit the commands in steps 0 to 6"):
+            self.assertIn(phrase, flat, phrase)
+
+    def test_t14_init_does_not_copy_or_mention_the_proposal_template(self):
+        self.assertNotIn("proposal", (ROOT / "skills" / "init" / "SKILL.md").read_text().lower())
+
+    def test_r1_the_reviewer_quotes_the_full_hash_on_line_two_and_fails_a_changed_proposal_readme(self):
+        flat = " ".join(AGENTS["reviewer"].split())
+        for phrase in ("`REVIEWED: <full 40-character hash>`", "second line", "VERDICT", ".team-work/<task-id>/reviewed-commit",
+                       "templates/proposal.md", "outside the filled-in values is a FAIL"):
+            self.assertIn(phrase, flat, phrase)
+        self.assertLess(flat.index("`VERDICT: PASS`"), flat.index("REVIEWED: <full"))
+
+    def test_r2_the_manager_checks_the_reviewed_line_and_the_boss_is_told_to_compare_it(self):
+        flat = " ".join(AGENTS["manager"].split())
+        self.assertIn("REVIEWED line equals the content of reviewed-commit", flat)
+        self.assertIn("the review's REVIEWED line", flat)
+
 if __name__ == "__main__":
     unittest.main()
