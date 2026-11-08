@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at exactly three gates, and every finished task gets a written report.
 
-Status: v0.4.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.5.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -16,7 +16,7 @@ Status: v0.4.0, MIT licensed. Built for one project (a home-lab bot) and general
 | Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
 | Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
-| Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples. |
+| Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
 
 ## The three gates
 1. **Plan approval**: nothing is built until you approve the planner's plan.
@@ -57,6 +57,14 @@ Everything project-specific lives in `.claude/project-profile.md` (template: `te
 the deploy flow, the notify method, protected paths, secret locations (paths only, never secrets), and the repository URL. The agents read it
 every time; the guard hook reads its fenced `devteam-profile` block. Without a profile the hook applies its strictest generic rules.
 
+## Proposals for changes only you can install
+Anything under `.claude/`, `CLAUDE.md` or permission settings is delivered by the builder as a proposal in `docs/proposed/<name>/`, with a README built from
+`templates/proposal.md`. You read that README from the reviewed commit (`git show <full hash>:docs/proposed/<name>/README.md`), never from the working tree.
+Its steps check that the folder is exactly the reviewed commit (nothing ignored or untracked, no later edits), that the targets are unchanged since the
+commit they were built on, and that the local git config sets nothing that runs programs; then they install each file from git's stored copy of the reviewed commit,
+run the tests, and can roll back. The reviewer quotes the full reviewed hash on line 2 of its review (`REVIEWED: <hash>`); compare it with the hand-over message.
+A proposal-only task has no deployer step: you reply "installed" and you merge the branch yourself.
+
 ## Reports
 After each task the manager writes `docs/reports/YYYY-MM-DD-<task>.md` (goal, plan, files with a one-line purpose, decisions and rejected
 alternatives, tests, review findings and fixes, security gates, deploy result and rollback point, open items, learning notes) and adds a row
@@ -76,6 +84,8 @@ before handing over, and you should run it before every push: `python3 <plugin>/
 - **Pushes are scanned.** Every `git push` through the Bash tool first runs a whole-repo secret scan and is blocked on any finding. Deliberate
   fakes in test fixtures are excused by `.claude/secret-scan-allow.txt` (`<glob> <kind>` per line, only that kind, only those files; an entry
   with no kind is ignored). Only you edit that file.
+- **Proposal checks prove "same bytes", not "safe".** They do not read `~/.gitconfig` or the system git config, cannot see a symlinked parent directory of a
+  target, and cannot prove you ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
 - **Approvals are narrow.** An approval after a denial covers only the exact action you approved.
 - **One task at a time per repository.** Two manager sessions in one repo are not supported.
 - **Cost.** Opus plans and reviews and the suite runs three times per task; that is deliberate for security-sensitive code. For a low-risk
