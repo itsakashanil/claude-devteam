@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at exactly three gates, and every finished task gets a written report.
 
-Status: v0.2.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.4.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -12,7 +12,7 @@ Status: v0.2.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `/devteam:init` | Sets the team up in a project: profile, protected paths, backlog, reports folder, and the permission rules for you to install. |
 | `/devteam:go <goal>` | Gives the manager a goal. It runs the whole pipeline and asks you only at the gates. |
 | `/devteam:status` | Summarises `docs/BACKLOG.md`: in progress, blocked, waiting for you, agent-run budget. |
-| 6 agents | manager, planner, builder, tester (sonnet), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
+| 6 agents | manager, planner, builder, tester (sonnet, runs and reads only, never edits files), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
 | Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
 | Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |

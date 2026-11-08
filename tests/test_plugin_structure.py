@@ -96,6 +96,11 @@ class Agents(unittest.TestCase):
         for name, text in AGENTS.items():
             self.assertIn("covers only the exact\naction they approved", text, name)
 
+    def test_the_builder_report_lists_every_denial_and_whether_it_was_retried_another_way(self):
+        body = AGENTS["builder"]
+        for phrase in ("Denied", "retried another way", "Denied: none", "which rule or hook"):
+            self.assertIn(phrase, body, phrase)
+
     def test_gate_3_needs_a_signed_off_security_impact_statement(self):
         self.assertIn("Security impact statement", AGENTS["planner"])
         self.assertIn("Security impact statement", AGENTS["reviewer"])
@@ -114,6 +119,61 @@ class Agents(unittest.TestCase):
         self.assertIn("secret_scan.py docs/reports", text)
         self.assertIn("whole-repo secret scan", text)
         self.assertIn("propose an entry, never add one", text)
+
+    def test_the_tester_runs_and_reads_but_cannot_edit(self):
+        fields = frontmatter(AGENTS["tester"])
+        self.assertEqual(set(re.split(r",\s*", fields["tools"])), {"Bash", "Glob", "Grep", "Read"})
+        disallowed = re.split(r",\s*", fields["disallowedTools"].strip())
+        for banned in ("Edit", "Write", "NotebookEdit"):
+            self.assertIn(banned, disallowed)
+        text = AGENTS["tester"]
+        for phrase in ("report the missing test for the builder", "git status --porcelain", "git rev-parse HEAD", "bin/", "obj/",
+                       "TestResults/", ".claude/project-profile.md", "project-profile.md"):
+            self.assertIn(phrase, text, phrase)
+        self.assertNotRegex(text, r"(?i)may add|add the test|extend tests")
+
+    def test_the_tester_states_the_blind_spots_and_limits_the_build_output_exception(self):
+        text = " ".join(AGENTS["tester"].split())
+        for phrase in ("detection, not prevention", "git-ignored paths", "inside .git/", "outside the repo",
+                       "commit followed by a reset", "second change to a file that was already modified",
+                       "only for paths that are not git-ignored and are clearly generated", "nothing else may be excused"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_the_tester_checks_the_whole_tree_before_and_after_and_does_not_undo_changes(self):
+        text = " ".join(AGENTS["tester"].split())
+        for phrase in ("--untracked-files=all", "git diff HEAD --stat", "HEAD must not have moved",
+                       "Any other change is a FAIL", "Do not undo it; report it"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_no_prompt_says_the_tester_adds_or_edits_tests(self):
+        pattern = re.compile(r"(?i)tester[^.\n]*\b(adds?|writes?|extends?|edits?)\b[^.\n]*tests?")
+        phrases = re.compile(r"(?i)may add|add the test|adds? the test|extend tests|extends? the tests|tester (can|may|will) (add|write|edit|extend)")
+        files = [p for folder in ("agents", "skills", "templates") for p in (ROOT / folder).rglob("*") if p.is_file()]
+        files.append(ROOT / "README.md")
+        for path in files:
+            text = " ".join(path.read_text().split())
+            self.assertIsNone(pattern.search(path.read_text()), str(path.relative_to(ROOT)))
+            self.assertIsNone(phrases.search(text), str(path.relative_to(ROOT)))
+
+    def test_the_manager_saves_the_test_report_and_rechecks_the_tree(self):
+        text = AGENTS["manager"]
+        for phrase in ("test-report.md", "git rev-parse HEAD", "git status --porcelain", "missing test"):
+            self.assertIn(phrase, text, phrase)
+        flat = " ".join(text.split())
+        self.assertIn("the files under .team-work/<task-id>/; they are the only files you edit", flat)
+        for phrase in ("git rev-parse HEAD", "git status --porcelain --untracked-files=all", "git diff HEAD --stat",
+                       "Before you start the tester", "After the tester returns", "do not edit any tracked file while the tester runs",
+                       "a changed diff stat for a file that was already modified"):
+            self.assertIn(phrase, flat, phrase)
+        self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
+        self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
+
+    def test_the_plugin_version_is_0_4_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.4.0")
+
+    def test_the_readme_states_the_current_version(self):
+        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+        self.assertIn(f"v{plugin['version']}", (ROOT / "README.md").read_text())
 
     def test_the_licence_is_mit(self):
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
@@ -136,6 +196,16 @@ class Generic(unittest.TestCase):
         for heading in ("## Goal", "## Plan", "## Files", "## Decisions and rejected alternatives", "## Tests", "## Review",
                         "## Security gates", "## Deploy result and rollback point", "## Open items", "## Learning notes"):
             self.assertIn(heading, text)
+
+    def test_the_report_template_says_tests_added_by_the_builder(self):
+        text = (ROOT / "templates" / "report.md").read_text()
+        self.assertIn("tests added by the builder", text)
+        self.assertNotIn("<tests added,", text)
+
+    def test_disallowed_tools_check_matches_whole_names(self):
+        # "Edit" must not be satisfied by "NotebookEdit"
+        listed = re.split(r",\s*", "Write, NotebookEdit".strip())
+        self.assertNotIn("Edit", listed)
 
     def test_the_profile_template_has_a_parseable_machine_block(self):
         import sys
