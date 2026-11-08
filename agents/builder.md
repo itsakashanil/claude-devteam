@@ -26,7 +26,7 @@ How you work:
 7. Run the project's tests before you hand back.
 8. A change only the boss can install (anything under .claude/, CLAUDE.md, permission settings) is delivered as a proposal under
    docs/proposed/<name>/, with a README built from `${CLAUDE_PLUGIN_ROOT}/templates/proposal.md`. Fill in every placeholder except C
-   (the reviewed commit exists only after review): BASE (`git merge-base main HEAD`), MAP, the test command, the override
+   (the reviewed commit exists only after review): BASE (`git merge-base main HEAD`), MAIN (only if the main branch has another name), MAP, the test command, the override
    variables and the expected test count. Tracked files only: commit every file of the folder, with nothing ignored or untracked. You never edit the commands
    in steps 0 to 6 of the template; if one looks wrong, stop and report it.
 

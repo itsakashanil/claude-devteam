@@ -421,11 +421,14 @@ class ProposalTemplate(unittest.TestCase):
     def test_t12_the_manager_hands_proposals_over_by_reference_and_never_installs_or_merges_them(self):
         flat = " ".join(AGENTS["manager"].split())
         for phrase in ("## Proposals the boss installs by hand", "${CLAUDE_PLUGIN_ROOT}/templates/proposal.md",
-                       "docs/proposed/<name>/README.md", "git show <full hash>:docs/proposed/<name>/README.md",
+                       "docs/proposed/<name>/README.md", "git " + GIT_FLAGS + " show <full hash>:docs/proposed/<name>/README.md",
                        "full 40-character", "reviewed-commit", "REVIEWED line", "stop every agent session",
                        "until step 4 passes", "Do not paste the steps", "no deployer step", '"installed"',
                        "never install, merge or remove a proposal", "merges any branch that changes .claude/ or CLAUDE.md",
-                       "refuse to hand over", "step 0", "ignored or untracked"):
+                       "refuse to hand over", "step 0", "ignored or untracked",
+                       "the full 40-character hash from .team-work/<task-id>/reviewed-commit",
+                       "the review does not count: ask the reviewer again on the same diff (this is not a fix round)",
+                       "the deployer handles the code, and the boss installs and merges the proposal branch"):
             self.assertIn(phrase, flat, phrase)
 
     def test_t13_the_builder_builds_proposals_from_the_template_and_commits_every_file(self):
@@ -441,7 +444,7 @@ class ProposalTemplate(unittest.TestCase):
     def test_r1_the_reviewer_quotes_the_full_hash_on_line_two_and_fails_a_changed_proposal_readme(self):
         flat = " ".join(AGENTS["reviewer"].split())
         for phrase in ("`REVIEWED: <full 40-character hash>`", "second line", "VERDICT", ".team-work/<task-id>/reviewed-commit",
-                       "templates/proposal.md", "outside the filled-in values is a FAIL"):
+                       "templates/proposal.md", "outside the filled-in values is a FAIL", "builder comment at the top (it must be deleted)", "including MAIN"):
             self.assertIn(phrase, flat, phrase)
         self.assertLess(flat.index("`VERDICT: PASS`"), flat.index("REVIEWED: <full"))
 

@@ -42,7 +42,7 @@ hand-over message.
 If the diff adds a proposal (a folder under docs/proposed/ whose README.md is meant to be run by the boss), compare that README
 with the plugin's `templates/proposal.md` (`${CLAUDE_PLUGIN_ROOT}/templates/proposal.md`) line by line. A proposal README that
 differs from templates/proposal.md outside the filled-in values is a FAIL. The filled-in values are the `<...>` placeholders, the
-variable lines and MAP in step 0, BASE, the test command, override variables and expected count in step 4, and the What and Task
+variable lines (including MAIN) and MAP in step 0, the builder comment at the top (it must be deleted), BASE, the test command, override variables and expected count in step 4, and the What and Task
 lines. Also check that the MAP matches the files in the folder and that every source file is tracked.
 
 ## When something is denied

@@ -59,7 +59,7 @@ every time; the guard hook reads its fenced `devteam-profile` block. Without a p
 
 ## Proposals for changes only you can install
 Anything under `.claude/`, `CLAUDE.md` or permission settings is delivered by the builder as a proposal in `docs/proposed/<name>/`, with a README built from
-`templates/proposal.md`. You read that README from the reviewed commit (`git show <full hash>:docs/proposed/<name>/README.md`), never from the working tree.
+`templates/proposal.md`. You read that README from the reviewed commit (`git -c core.hooksPath=/dev/null -c core.fsmonitor=false show <full hash>:docs/proposed/<name>/README.md`), never from the working tree.
 Its steps check that the folder is exactly the reviewed commit (nothing ignored or untracked, no later edits), that the targets are unchanged since the
 commit they were built on, and that the local git config sets nothing that runs programs; then they install each file from git's stored copy of the reviewed commit,
 run the tests, and can roll back. The reviewer quotes the full reviewed hash on line 2 of its review (`REVIEWED: <hash>`); compare it with the hand-over message.
@@ -84,8 +84,11 @@ before handing over, and you should run it before every push: `python3 <plugin>/
 - **Pushes are scanned.** Every `git push` through the Bash tool first runs a whole-repo secret scan and is blocked on any finding. Deliberate
   fakes in test fixtures are excused by `.claude/secret-scan-allow.txt` (`<glob> <kind>` per line, only that kind, only those files; an entry
   with no kind is ignored). Only you edit that file.
-- **Proposal checks prove "same bytes", not "safe".** They do not read `~/.gitconfig` or the system git config, cannot see a symlinked parent directory of a
-  target, and cannot prove you ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
+- **Proposal checks prove "same bytes", not "safe".** Every git call in the template runs with hooks and fsmonitor off, and the checks stop if HEAD or the
+  working tree differs from the reviewed commit (reports and backlog excepted). They read only common program-running keys in `.git/config`: not
+  config.worktree, diff/merge drivers, `pager.<cmd>`, `gpg.program`, GIT_* variables, `~/.gitconfig` or the system config. Your own shell (PATH, `~/.bashrc`,
+  aliases) and the installed plugin copy of the template are writable by the agents. They cannot see a symlinked parent directory of a target or prove you
+  ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
 - **Approvals are narrow.** An approval after a denial covers only the exact action you approved.
 - **One task at a time per repository.** Two manager sessions in one repo are not supported.
 - **Cost.** Opus plans and reviews and the suite runs three times per task; that is deliberate for security-sensitive code. For a low-risk
