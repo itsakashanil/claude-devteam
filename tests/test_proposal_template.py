@@ -65,14 +65,15 @@ class Repo:
     def path(self, rel):
         return self.dir / rel
 
-    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None, test_cmd="true", interrupt_step_2=False):
+    def run(self, steps, c=None, base=None, branch=BRANCH, map_=None, between=None, test_cmd="true", interrupt_step_2=False,
+            cwd=None, prefix=""):
         """Run the filled-in blocks of the given steps in one bash process, like the boss's terminal."""
         step0 = block(0)
         values = {"C": c or self.c, "BASE": base or self.base, "B": branch, "P": P}
         for name, value in values.items():
             step0 = re.sub(rf"(?m)^{name}=.*$", lambda _m, n=name, v=value: f"{n}={v}", step0)
         step0 = re.sub(r"(?m)^MAP='.*'$", lambda _m: "MAP='" + (map_ or self.map) + "'", step0)
-        pieces = []
+        pieces = [prefix] if prefix else []
         for n in steps:
             if n == 0:
                 pieces.append(step0)
@@ -85,7 +86,7 @@ class Repo:
                 pieces.append(block(n))
             if between and n == between[0]:
                 pieces.append(between[1])
-        done = subprocess.run(["bash", "-c", "\n".join(pieces)], cwd=self.dir, env=self.env, capture_output=True, text=True, timeout=60)
+        done = subprocess.run(["bash", "-c", "\n".join(pieces)], cwd=cwd or self.dir, env=self.env, capture_output=True, text=True, timeout=60)
         return done.stdout + done.stderr
 
     def leftovers(self):
@@ -314,6 +315,23 @@ class GitProgramsStayOff(unittest.TestCase):
         self.assertIn("OK: step 3", out)
         self.assertFalse(self.marker.exists(), self.marker.read_text() if self.marker.exists() else "")
 
+    def test_steps_6_and_7_run_no_hook_and_no_fsmonitor(self):
+        out = self.repo.run([0, 1, 3, 4, 6, 7])
+        self.assertIn("OK: step 7", out)
+        self.assertEqual(self.repo.git("log", "-1", "--format=%s", "main").split()[0], "Merge")
+        self.assertFalse(self.marker.exists(), self.marker.read_text() if self.marker.exists() else "")
+
+    def test_the_hooks_do_fire_on_a_bare_commit_merge_and_checkout(self):
+        # guards the test: the post-commit, post-merge and post-checkout hooks are live in this repository
+        self.repo.git("checkout", "-q", "main")
+        self.repo.git("merge", "-q", "--no-ff", "--no-edit", BRANCH)
+        self.repo.write("y.txt", "y\n")
+        self.repo.git("add", "y.txt")
+        self.repo.git("commit", "-q", "-m", "y")
+        text = self.marker.read_text()
+        for hook in ("post-checkout", "post-merge", "pre-commit", "commit-msg", "post-commit"):
+            self.assertIn(hook, text, hook)
+
     def test_the_rollback_runs_no_hook_and_no_fsmonitor(self):
         out = self.repo.run([0, 1, 3, 5])
         self.assertEqual(self.repo.path(".claude/agents/old.md").read_text(), "old\n")
@@ -420,10 +438,16 @@ class VerifyAndFinish(unittest.TestCase):
         self.assertIn("STOP:", out)
         self.assertNotIn("OK: step 6", out)
 
-    def test_d5_the_boss_is_told_to_restart_sessions_only_after_the_commit(self):
+    def test_d5_step_6_does_not_say_restart_and_step_7_does_only_when_the_merge_is_done(self):
         out = self.repo.run([0, 1, 3, 4, 6])
-        self.assertIn("restart", out.lower())
-        self.assertGreater(out.lower().index("restart"), out.index("OK: step 6"))
+        self.assertIn("OK: step 6", out)
+        self.assertNotIn("restart", out.lower())
+        self.assertIn("step 7", out)
+        other = Repo()
+        self.addCleanup(other.close)
+        out = other.run([0, 1, 3, 4, 6, 7])
+        self.assertIn("OK: step 7", out)
+        self.assertGreater(out.lower().index("restart"), out.index("OK: step 7"))
 
     def test_b6_head_past_the_reviewed_commit_with_code_changes_stops_step_0(self):
         self.repo.write("tests/test_x.py", "print('evil')\n")
@@ -478,6 +502,213 @@ class RollbackOnlyUndoesWhatWasInstalled(unittest.TestCase):
     def test_f4_step_5_refuses_unsafe_map_lines(self):
         out = self.repo.run([0, 5], map_="0644 old.md ./.git/hooks/pre-commit")
         self.assertIn("STOP:", out)
+
+
+class AllowedDocsNames(unittest.TestCase):
+    """After review only docs/BACKLOG.md and docs/reports/<name>.md (no further /) may differ, committed or not."""
+
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def commit_file(self, rel):
+        self.repo.write(rel, "x\n")
+        self.repo.git("add", "-f", rel)
+        self.repo.git("commit", "-q", "-m", "after review")
+
+    def assertStops(self, out, *needles):
+        self.assertIn("STOP:", out)
+        self.assertNotIn("installed ", out)
+        for needle in needles:
+            self.assertIn(needle, out)
+
+    def test_h1_untracked_conftest_in_reports_stops_it(self):
+        self.repo.write("docs/reports/conftest.py", "print('evil')\n")
+        self.assertStops(self.repo.run([0, 1, 3]), "docs/reports/conftest.py", "outside the reviewed commit")
+
+    def test_h2_committed_conftest_in_reports_after_review_stops_it(self):
+        self.commit_file("docs/reports/conftest.py")
+        self.assertStops(self.repo.run([0, 1, 3]), "docs/reports/conftest.py", "differs from the reviewed commit outside")
+
+    def test_h3_a_file_in_a_subfolder_of_reports_stops_it(self):
+        self.repo.write("docs/reports/sub/x.md", "x\n")
+        self.assertStops(self.repo.run([0, 1, 3]), "docs/reports/sub/x.md")
+        self.repo.path("docs/reports/sub/x.md").unlink()
+        self.commit_file("docs/reports/sub/y.md")
+        self.assertStops(self.repo.run([0, 1, 3]), "docs/reports/sub/y.md")
+
+    def test_h4_a_folder_named_backlog_stops_it(self):
+        self.repo.write("docs/BACKLOG.md/x", "x\n")
+        self.assertStops(self.repo.run([0, 1, 3]), "docs/BACKLOG.md/x")
+
+    def test_h5_other_names_in_docs_or_reports_stop_it(self):
+        for rel in ("docs/reports/x.py", "docs/reports/.md", "docs/other.md", "docs/BACKLOG.md.bak", "docs/reports/x.md.sh"):
+            with self.subTest(rel):
+                self.repo.write(rel, "x\n")
+                self.assertStops(self.repo.run([0, 1, 3]), rel)
+                self.repo.path(rel).unlink()
+
+    def test_h6_a_staged_rename_into_a_bad_name_stops_it(self):
+        self.repo.write("docs/reports/a.md", "a\n")
+        self.repo.git("add", "docs/reports/a.md")
+        self.repo.git("commit", "-q", "-m", "allowed report")
+        self.repo.git("mv", "docs/reports/a.md", "docs/reports/conftest.py")
+        out = self.repo.run([0, 1, 3])
+        self.assertStops(out, "docs/reports/conftest.py")
+
+    def test_h7_a_path_with_odd_characters_is_quoted_safely_and_stops_it(self):
+        self.repo.write("docs/reports/we ird\\n.py", "x\n")
+        out = self.repo.run([0, 1, 3])
+        self.assertStops(out, "we")
+
+    def test_h8_the_two_allowed_names_pass_committed_and_uncommitted(self):
+        self.commit_file("docs/reports/2026-11-08-T-005.md")
+        self.repo.write("docs/BACKLOG.md", "edited\n")
+        self.repo.write("docs/reports/2026-11-09-T-006.md", "new\n")
+        out = self.repo.run([0, 1, 3])
+        self.assertNotIn("STOP:", out)
+        self.assertIn("OK: step 3", out)
+
+
+class Step6AndMerge(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+
+    def main_edit(self, rel, text):
+        """Shell snippet that moves main by one commit editing rel, without touching the working tree or HEAD."""
+        return (f"export GIT_INDEX_FILE=$PWD/.git/tmp-index; git read-tree main; "
+                f"b=$(printf '{text}\\n' | git hash-object -w --stdin); git update-index --add --cacheinfo 100644,$b,{rel}; "
+                "t=$(git write-tree); c=$(git commit-tree $t -p main -m moved); git update-ref refs/heads/main $c; "
+                "unset GIT_INDEX_FILE; rm -f .git/tmp-index")
+
+    def test_i1_happy_path_commits_then_merges_and_main_has_the_reviewed_blobs(self):
+        out = self.repo.run([0, 1, 3, 4, 6, 7])
+        self.assertNotIn("STOP:", out)
+        self.assertIn("OK: step 6", out)
+        self.assertIn("OK: step 7", out)
+        self.assertEqual(self.repo.git("branch", "--show-current").strip(), "main")
+        self.assertEqual(len(self.repo.git("log", "-1", "--format=%p").split()), 2, "a merge commit")
+        for src, dst in (("old.md", ".claude/agents/old.md"), ("tool.sh", ".claude/scripts/new/tool.sh")):
+            self.assertEqual(self.repo.git("rev-parse", f"main:{dst}"), self.repo.git("rev-parse", f"{self.repo.c}:{P}/{src}"))
+        self.assertEqual(self.repo.git("ls-tree", "main", ".claude/scripts/new/tool.sh").split()[0], "100755")
+        self.assertFalse(self.repo.path(P).exists())
+        self.assertEqual(self.repo.git("status", "--short"), "")
+
+    def test_i2_a_commit_on_the_branch_after_step_4_stops_step_6(self):
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, "echo x > late.txt; git -c core.hooksPath=/dev/null add late.txt; "
+                                                         "git -c core.hooksPath=/dev/null commit -q -m late"))
+        self.assertIn("STOP:", out)
+        self.assertIn("HEAD", out)
+        self.assertNotIn("OK: step 6", out)
+        self.assertEqual(self.repo.git("log", "-1", "--format=%s").strip(), "late")
+
+    def test_i3_a_local_filter_added_after_step_4_stops_step_6_and_never_runs(self):
+        marker = self.repo.tmp / "filter-marker"
+        script = self.repo.tmp / "filter.sh"
+        script.write_text(f"#!/bin/sh\necho ran >> {marker}\ncat\n")
+        script.chmod(0o755)
+        setup = f"echo '* filter=x' >> .git/info/attributes; git config filter.x.clean {script}"
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, setup))
+        self.assertIn("STOP:", out)
+        self.assertIn("filter.x.clean", out)
+        self.assertNotIn("OK: step 6", out)
+        self.assertFalse(marker.exists(), "the filter ran")
+        # control: a bare git add would have run it
+        self.repo.git("add", ".claude/agents/old.md")
+        self.assertTrue(marker.exists(), "the test filter does not fire, so the test proves nothing")
+
+    def test_i4_a_target_changed_on_main_after_step_1_stops_step_6_before_any_commit(self):
+        head = self.repo.git("rev-parse", "HEAD")
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, self.main_edit(".claude/agents/old.md", "edited on main")))
+        self.assertIn("STOP:", out)
+        self.assertIn("changed on main since BASE", out)
+        self.assertNotIn("OK: step 6", out)
+        self.assertEqual(self.repo.git("rev-parse", "HEAD"), head)
+
+    def test_i5_a_new_target_created_on_main_after_step_1_stops_step_6(self):
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, self.main_edit(".claude/scripts/new/tool.sh", "squat")))
+        self.assertIn("exists on main", out)
+        self.assertNotIn("OK: step 6", out)
+
+    def test_i6_a_target_changed_on_main_between_step_6_and_7_stops_the_merge(self):
+        out = self.repo.run([0, 1, 3, 4, 6, 7], between=(6, self.main_edit(".claude/agents/old.md", "edited on main")))
+        self.assertIn("OK: step 6", out)
+        self.assertIn("changed on main since BASE", out)
+        self.assertNotIn("OK: step 7", out)
+        self.assertEqual(self.repo.git("branch", "--show-current").strip(), BRANCH, "still on the task branch")
+        self.assertEqual(len(self.repo.git("log", "-1", "--format=%p").split()), 1, "nothing merged")
+
+    def test_i7_a_commit_after_step_6_stops_the_merge(self):
+        out = self.repo.run([0, 1, 3, 4, 6, 7], between=(6, "echo x > late.txt; git -c core.hooksPath=/dev/null add late.txt; "
+                                                            "git -c core.hooksPath=/dev/null commit -q -m late"))
+        self.assertIn("STOP:", out)
+        self.assertNotIn("OK: step 7", out)
+        self.assertEqual(self.repo.git("branch", "--show-current").strip(), BRANCH)
+
+    def test_i8_a_merge_conflict_is_a_stop_that_names_merge_abort(self):
+        # main edits an unrelated file the branch also edits: not a target, so the pre-checks pass and the merge itself conflicts
+        self.repo.write("shared.txt", "base\n")
+        self.repo.git("checkout", "-q", "main")
+        self.repo.write("shared.txt", "base\n")
+        self.repo.git("add", "-A")
+        self.repo.git("commit", "-q", "-m", "shared")
+        self.repo.git("checkout", "-q", BRANCH)
+        self.repo.git("merge", "-q", "--no-edit", "main")
+        c_before = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.git("checkout", "-q", "main")
+        self.repo.write("shared.txt", "main side\n")
+        self.repo.git("commit", "-q", "-am", "main side")
+        self.repo.git("checkout", "-q", BRANCH)
+        self.repo.write("shared.txt", "branch side\n")
+        self.repo.git("commit", "-q", "-am", "branch side")
+        reviewed = self.repo.git("rev-parse", "HEAD").strip()
+        out = self.repo.run([0, 1, 3, 4, 6, 7], c=reviewed, base=self.repo.git("rev-parse", "main").strip())
+        self.assertIn("STOP:", out)
+        self.assertIn("merge --abort", out)
+        self.assertNotIn("OK: step 7", out)
+
+    def test_i9_a_subdirectory_is_a_stop(self):
+        sub = self.repo.path("docs/sub")
+        sub.mkdir(parents=True)
+        out = self.repo.run([0, 1, 3], cwd=sub)
+        self.assertIn("STOP:", out)
+        self.assertIn("repository root", out)
+        self.assertFalse(self.repo.path(".claude/scripts/new/tool.sh").exists())
+
+    def test_i10_step_6_and_7_from_a_subdirectory_are_a_stop(self):
+        self.repo.path("docs/sub").mkdir(parents=True)
+        out = self.repo.run([0, 1, 3, 4, 6], between=(4, f"cd {self.repo.path('docs/sub')}"))
+        self.assertIn("repository root", out)
+        self.assertNotIn("OK: step 6", out)
+
+    def test_i11_an_alias_named_g_does_not_break_the_blocks(self):
+        prefix = "shopt -s expand_aliases\nalias g='git status'"
+        self.repo.write(".claude/scripts/new/tool.sh", "squatter\n")
+        out = self.repo.run([0, 1, 3], prefix=prefix)
+        self.assertIn("should be new but already exists", out)
+        self.assertNotIn("installed ", out)
+        self.repo.path(".claude/scripts/new/tool.sh").unlink()
+        out = self.repo.run([0, 1, 3, 4, 6, 7], prefix=prefix)
+        self.assertNotIn("STOP:", out)
+        self.assertIn("OK: step 7", out)
+
+    def test_i12_the_rollback_counts_a_failed_restore_as_left_alone(self):
+        out = self.repo.run([0, 1, 3, 5], between=(3, "touch .git/index.lock"))
+        self.assertIn("could not be rolled back", out)
+        self.assertNotIn("rolled back .claude/agents/old.md", out)
+        self.assertNotIn("OK: step 5", out)
+        self.assertIn("STOP:", out)
+
+    def test_i13_the_rollback_counts_a_failed_remove_as_left_alone(self):
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        d = self.repo.path(".claude/scripts/new")
+        out = self.repo.run([0, 1, 3, 5], between=(3, f"chmod 555 {d}"))
+        d.chmod(0o755)
+        self.assertIn("could not be rolled back", out)
+        self.assertNotIn("rolled back .claude/scripts/new/tool.sh", out)
+        self.assertNotIn("OK: step 5", out)
 
 
 class TempFilesAreRemoved(unittest.TestCase):
