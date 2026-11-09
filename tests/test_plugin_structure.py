@@ -554,7 +554,7 @@ class DenialAndChannelGates(unittest.TestCase):
         text = flat(AGENTS["manager"])
         for phrase in ("ONE rerun", "quoted word for word in the backlog", "the hash still matches",
                        "the denied action was not that method itself", "did not already switch to it in its run",
-                       "the same list as the shared denial block",
+                       "falls under the shared denial block's exclusions",
                        "rerun after denial:", "It is not a fix round"):
             self.assertIn(phrase, text, phrase)
 

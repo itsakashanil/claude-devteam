@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.6.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.7.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -113,6 +113,10 @@ before handing over, and you should run it before every push: `python3 <plugin>/
 - **Pushes are scanned.** Every `git push` through the Bash tool first runs a whole-repo secret scan and is blocked on any finding. Deliberate
   fakes in test fixtures are excused by `.claude/secret-scan-allow.txt` (`<glob> <kind>` per line, only that kind, only those files; an entry
   with no kind is ignored). Only you edit that file.
+- **Pushes ask you.** The manager's push gate is coded; on top of it a push asks you in the permission prompt after the coded gate: the hook asks before every
+  allowed `git push` (every spelling it unwraps, for every agent) once the scan is clean. A force, delete or mirror push is still blocked
+  outright; the hook sees only a `git push` typed through the Bash tool, not a script, `gh` or `curl`. Whether a hook "ask" also prompts
+  in auto mode is not verified, so check once, live, that the prompt also appears in auto mode (and that a push never runs without it).
 - **Proposal checks prove "same bytes", not "safe".** Every git call in the template runs with hooks and fsmonitor off, and the checks stop if HEAD or the
   working tree differs from the reviewed commit, except for exactly `docs/BACKLOG.md` and `docs/reports/<name>.md` (one `.md` file directly in `docs/reports`, the only
   files the manager writes after review; a `conftest.py` or `test_*.py` there, or a subfolder, is a STOP because test runners load code by those names). They read only common program-running keys in `.git/config`: not
