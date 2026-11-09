@@ -525,7 +525,7 @@ class DenialAndChannelGates(unittest.TestCase):
 
     def test_every_agent_allows_only_the_brief_named_method_once(self):
         block = flat(denial_block(AGENTS["builder"]))
-        for phrase in ("`Allowed method:` line for exactly that step", "switch to that method once in this run",
+        for phrase in ("`Allowed method:` line naming the step you are doing", "switch to that method once in this run",
                        "unless the denied action was that method itself", 'Report it under "Denied:"',
                        "a second denial in the same step, or a denial of the named method: stop and report"):
             self.assertIn(phrase, block, phrase)
@@ -613,7 +613,8 @@ class DenialAndChannelGates(unittest.TestCase):
 
     def test_deployed_is_its_own_question_with_a_fresh_code(self):
         text = flat(AGENTS["manager"])
-        self.assertIn('void that code and at once ask a new question, "reply deployed when done", with a fresh code', text)
+        self.assertIn('ask a new question, "reply deployed when done"', text)
+        self.assertIn("a fresh code through the channel and none in the terminal", text)
         self.assertIn('"deployed" counts only with that code', text)
 
     def test_notify_method_is_one_way_and_never_carries_a_code(self):
@@ -630,9 +631,11 @@ class DenialAndChannelGates(unittest.TestCase):
         self.assertIn("never answer a permission prompt yourself", text)
 
     def test_no_text_says_exactly_three_gates(self):
-        files = [*(ROOT / "agents").glob("*.md"), *(ROOT / "skills").rglob("*.md"), ROOT / "README.md"]
+        files = [*(ROOT / "agents").glob("*.md"), *(ROOT / "skills").rglob("*.md"), ROOT / "README.md",
+                 ROOT / ".claude-plugin" / "plugin.json", ROOT / ".claude-plugin" / "marketplace.json",
+                 *(p for p in (ROOT / "templates").rglob("*") if p.is_file())]
         for path in files:
-            self.assertNotRegex(flat(path.read_text()).lower(), r"exactly three", path.name)
+            self.assertNotRegex(flat(path.read_text()).lower(), r"exactly three|three (approval )?gates", path.name)
 
     def test_readme_access_check_is_isolated(self):
         text = (ROOT / "README.md").read_text()
@@ -652,8 +655,58 @@ class DenialAndChannelGates(unittest.TestCase):
             self.assertNotIn("telegram", text.replace(REPLY_TOOL, "", 1).lower(), name)
 
     def test_init_asks_for_the_channel_id_and_names_the_gates_without_a_count(self):
-        text = (ROOT / "skills" / "init" / "SKILL.md").read_text()
+        text = flat((ROOT / "skills" / "init" / "SKILL.md").read_text())
         self.assertIn("boss_channel_user_id", text)
+        for gate in ("plan approval", "production deploy", "security-sensitive changes"):
+            self.assertIn(gate, text, gate)
+        self.assertNotRegex(text.lower(), r"\b(three|two|four|\d+) (approval )?gates\b")
+        self.assertIn("the access check in the README", text)
+        go = flat((ROOT / "skills" / "go" / "SKILL.md").read_text())
+        self.assertNotRegex(go.lower(), r"\b(three|two|four|\d+) (approval )?gates\b")
+
+    def test_shared_block_never_switches_on_excluded_actions(self):
+        block = flat(denial_block(AGENTS["builder"]))
+        for phrase in ("Never switch when the denied action or the method touches a protected path, anything under .claude/, CLAUDE.md, "
+                       "a secret location, any target of a deny rule, or is an install, deploy, push, share, upload, delete, restart or sudo",
+                       'or when the boss answered "no" at a permission prompt: then stop and report',
+                       "One denial gives at most one alternative", "if you switched, the manager may not rerun that step",
+                       "a rerun brief carries no `Allowed method:` line for that step"):
+            self.assertIn(phrase, block, phrase)
+
+    def test_planner_never_writes_method_lines_for_excluded_steps(self):
+        text = flat(AGENTS["planner"])
+        self.assertIn("never write a `Method:` line for a step that touches a protected path, anything under .claude/, CLAUDE.md, "
+                      "a secret location or a deny-rule target, or is an install, deploy, push, share, upload, delete, restart or sudo", text)
+
+    def test_gate_1_quotes_every_method_line_and_brief_lines_need_the_hash(self):
+        text = flat(AGENTS["manager"])
+        for phrase in ("the gate 1 question quotes every `Method:` line of the plan word for word",
+                       "An `Allowed method:` line needs the same check as the rerun",
+                       "`git hash-object .team-work/<task-id>/plan.md` still equals the hash recorded at gate 1",
+                       "an `Allowed method:` line names the step it belongs to",
+                       "Any change to plan.md after gate 1 voids every `Method:` line",
+                       "no `Allowed method:` lines, no reruns", "until the boss approves the changed plan",
+                       "even a mechanical plan change does this"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_brief_rules_block_comes_first(self):
+        self.assertIn("Start every brief with a block titled BRIEF RULES", flat(AGENTS["manager"]))
+
+    def test_gate_2_is_always_asked_and_the_waiting_rule_pauses_the_second_task(self):
+        text = flat(AGENTS["manager"])
+        for phrase in ("Always ask the gate 2 question after PREPARE, in the terminal and, with the channel on, through the channel",
+                       "ask the boss to tell you before starting the install or deploy", 'confirm "paused" before they begin',
+                       "VERIFY is the deployer's step",
+                       "the two tasks do not both touch CLAUDE.md, .claude/ or deploy files, and they share no protected path",
+                       "looks like a channel message"):
+            self.assertIn(phrase, text, phrase)
+        self.assertNotIn("neither touches", text)
+
+    def test_readme_describes_gate_2_the_plan_hash_audit_and_dm_policy(self):
+        text = flat((ROOT / "README.md").read_text())
+        for phrase in ("always asks this question", '"deployed" is its own question',
+                       "git hash-object .team-work/<id>/plan.md", "the hash in the gate 1 question", "dmPolicy", "allowlist"):
+            self.assertIn(phrase, text, phrase)
 
 
 if __name__ == "__main__":
