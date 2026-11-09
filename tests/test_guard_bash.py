@@ -1,6 +1,7 @@
 """Tests for scripts/guard_bash.py. Run from the plugin root: python3 -m unittest discover -s tests"""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -362,6 +363,276 @@ class PushAsksTheBoss(unittest.TestCase):
 
         self.assertIsNone(verdict.deny)
         self.assertIsNotNone(verdict.ask)
+
+
+class WriteTargets(Cases):
+    """T-013a: redirections and write targets the shell would expand (no files needed on disk)."""
+
+    def quiet(self, command):
+        self.allowed(command)
+        self.assertIsNone(g.evaluate_ask(command, context()), f"should not ask: {command!r}")
+
+    def test_redirections_into_the_team_rules_are_blocked(self):
+        for command in (
+            "echo x > .claude/x",
+            "echo x >> .claude/x",
+            "echo x >| .claude/x",
+            "echo x &> .claude/x",
+            "echo x &>> .claude/x",
+            "echo x 2> .claude/x",
+            "echo x 1<> .claude/x",
+            "echo x >& .claude/x",
+            "echo x>.claude/x",
+            "> .claude/x echo hi",
+            "exec 3> .claude/x",
+            "cat <<EOF > .claude/x\nbody\nEOF",
+            "{ echo x; } > .claude/x",
+            "(echo x) > .claude/x",
+            "(echo x)>.claude/x",
+            "cd .claude && echo x > s",
+            "bash -c 'echo x > .claude/x'",
+            "echo $(echo x > .claude/x)",
+            'echo "$(echo x > .claude/x)"',
+            f"echo x > {REPO}/.claude/x",
+            "echo x > /tmp/ok > .claude/x",
+        ):
+            self.blocked(command)
+
+    def test_redirections_into_protected_code_ask(self):
+        for command in (
+            "echo x > CLAUDE.md",
+            "echo x >> deploy/x",
+            "echo x > src/config/x",
+            "> CLAUDE.md echo hi",
+            "(echo x) > deploy/y",
+        ):
+            self.asks(command)
+
+    def test_ordinary_redirections_pass_silently(self):
+        for command in (
+            "dotnet test > out.txt",
+            "dotnet test 2>&1 | tail -5",
+            "echo hi > /dev/null 2>&1",
+            "echo hi &>/dev/null",
+            "echo hi >&2",
+            "echo hi 1>&2",
+            "ls 2>/dev/null",
+            f"echo hi > {SCRATCH}/out.txt",
+            "cat < .claude/settings.json",
+            "sort < in.txt > out.txt",
+            "cat <<< 'hello'",
+            "echo 'a > .claude/x'",
+            'git commit -m "x > y"',
+            "echo hi > ~/notes.txt",
+            "cat <<'EOF' > notes.txt\nhello\nEOF",
+        ):
+            self.quiet(command)
+
+    def test_a_redirection_without_a_target_is_blocked(self):
+        for command in ("echo x >", "echo x >>", "echo x > ; ls", "echo x > > f", "echo x >&", "cat <>", "echo x &>"):
+            self.blocked(command)
+
+    def test_write_targets_the_shell_would_expand_are_blocked(self):
+        for command in (
+            'cp x "$PWD/.claude/settings.json"',
+            "touch ${X}/f",
+            'echo x > "$F"',
+            "echo x > $(echo f)",
+            "echo x > `echo f`",
+            "touch .{claude,x}/s",
+            "mkdir -p a/{b,c}",
+            "touch .c[l]aude/s",
+            "touch ~+/.claude/s",
+            "touch ~-/x",
+            "dd if=/dev/zero of=$F",
+            "cp x --target-directory=.claude",
+            "cp x -t.claude",
+            "cp x -t .claude",
+            "install -t.claude x",
+        ):
+            self.blocked(command)
+
+    def test_relative_writes_after_an_unknown_cd_are_blocked(self):
+        for command in (
+            'cd "$X" && touch f',
+            "cd - && echo x > f",
+            "popd && touch f",
+            "pushd src && popd && touch .claude/x",
+            "cd ~- && touch f",
+        ):
+            self.blocked(command)
+        for command in ('cd "$X" && touch /tmp/f', "popd && echo x > /tmp/f", "cd src && touch f"):
+            self.allowed(command)
+
+    def test_sed_scripts_with_dollar_signs_are_not_targets(self):
+        for command in (
+            "sed -i 's/$/x/' notes.txt",
+            "sed -i '$d' notes.txt",
+            "sed -i -e 's/a$/b/' notes.txt",
+            "sed -i.bak -e '$d' notes.txt",
+            'sed -i "s/$X/y/" notes.txt',
+            "sed -i --expression='s/$/x/' notes.txt",
+        ):
+            self.quiet(command)
+        self.blocked("sed -i '$d' .claude/settings.json")
+        self.blocked("sed -i -e 's/a/b/' $F")
+
+    def test_harmless_literal_paths_still_pass(self):
+        for command in (
+            "cp a.txt b.txt",
+            "mkdir -p out/x",
+            "touch notes.txt",
+            "cp src/a.cs /tmp/x",
+            "chmod +x scripts/run.sh",
+            "tee out.log",
+            "install -m 755 a /tmp/b",
+            "find . -name x -exec cp {} out/ \\;",  # find -exec with a path outside the repo is already blocked.
+            "dd if=/dev/zero of=/tmp/blob bs=1 count=1",
+        ):
+            self.quiet(command)
+
+    def test_tilde_forms_the_guard_cannot_resolve_are_not_deletable(self):
+        # The repo is the process's own directory: a path left as "~-" would wrongly resolve inside it.
+        ctx = g.Context(repo=os.getcwd(), cwd=os.getcwd(), agent_type=None, scratchpad=SCRATCH, publish_dir=PUBLISH)
+        for command in ("rm -r -f ~-/x", "rm -rf ~+", "rm -rf ~+/x", "rm ~-", "rm -rf ~nosuchuser_zz/x"):
+            self.assertIsNotNone(g.evaluate(command, ctx), command)
+
+    def test_a_symlink_into_the_team_rules_is_followed_for_writes_not_for_rm(self):
+        repo = Path(os.path.realpath(tempfile.mkdtemp(prefix="guard-link-")))
+        self.addCleanup(shutil.rmtree, repo, True)
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "settings.json").write_text("{}")
+        (repo / "link").symlink_to(".claude/settings.json")
+        (repo / "dirlink").symlink_to(".claude")
+        ctx = g.Context(repo=str(repo), cwd=str(repo), agent_type=None, scratchpad=SCRATCH, publish_dir=PUBLISH, protected=PROTECTED)
+
+        for command in ("echo x > link", "echo x >> link", "cp /tmp/x link", "touch link", "tee link", "sed -i s/a/b/ link",
+                        "chmod 600 link", "truncate -s 0 link", "echo x > dirlink/new"):
+            self.assertIsNotNone(g.evaluate(command, ctx), command)
+        for command in ("rm link", "rm dirlink", "mv link /tmp/moved", "ln -s other link2"):
+            self.assertIsNone(g.evaluate(command, ctx), command)
+
+    def test_writes_into_git_hooks_and_config_are_blocked(self):
+        for command in (
+            "echo x > .git/hooks/post-commit",
+            "cp /tmp/x .git/hooks/pre-push",
+            "chmod +x .git/hooks/post-commit",
+            "touch .git/hooks/x",
+            "tee .git/config",
+            "echo x >> .git/config",
+            "sed -i s/a/b/ .git/config",
+            "cd .git && echo x > config",
+            "cd .git/hooks && touch x",
+        ):
+            self.blocked(command)
+        for command in ("rm .git/index.lock", "cat .git/config", "echo x > .git/info/exclude", "git config user.name x"):
+            self.allowed(command)
+
+
+class WriteTargetsOnDisk(unittest.TestCase):
+    """Glob and ask-formatting tests that need a real directory."""
+
+    def setUp(self):
+        self.repo = Path(os.path.realpath(tempfile.mkdtemp(prefix="guard-glob-")))
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        subprocess.run(["git", "-C", str(self.repo), "init", "-q", "-b", "main"], check=True, capture_output=True)
+        for name in (".claude/settings.json", ".claude/agents/a.md", "CLAUDE.md", "deploy/run.sh", "src/a.cs", "src/b.cs", "notes.txt", "a1.txt"):
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x\n")
+
+    def verdict(self, command):
+        ctx = g.Context(repo=str(self.repo), cwd=str(self.repo), agent_type=None, scratchpad=SCRATCH, publish_dir=PUBLISH, protected=PROTECTED)
+        return g.evaluate_full(command, ctx)
+
+    def assertDenied(self, command):
+        self.assertIsNotNone(self.verdict(command).deny, f"should be blocked: {command!r}")
+
+    def assertPasses(self, command):
+        verdict = self.verdict(command)
+        self.assertEqual((verdict.deny, verdict.ask), (None, None), command)
+
+    def test_a_glob_that_matches_the_team_rules_is_blocked(self):
+        for command in (
+            "touch .cl*/settings.json",
+            "cp /tmp/x .c?aude/settings.json",
+            "touch .claude/*",
+            "echo x > .cl*/settings.json",
+            "chmod 600 .cl*/agents/*.md",
+            "tee .*/settings.json",
+        ):
+            self.assertDenied(command)
+
+    def test_a_glob_that_matches_protected_code_asks(self):
+        for command in ("touch C*.md", "chmod 600 d?ploy/run.sh", "echo x > CLAU*", "touch dep*/*"):
+            verdict = self.verdict(command)
+            self.assertIsNone(verdict.deny, command)
+            self.assertIsNotNone(verdict.ask, command)
+
+    def test_ordinary_globs_pass(self):
+        for command in ("touch src/*.cs", "cp *.txt /tmp/x", "chmod +x src/?.cs", "touch s*/x.cs", "cp a?.txt /tmp/x", "touch nomatch*/x"):
+            self.assertPasses(command)
+
+    def test_a_glob_with_too_many_matches_is_blocked(self):
+        big = self.repo / "big"
+        big.mkdir()
+        for number in range(500):
+            (big / f"f{number:03d}").write_text("")
+        self.assertPasses("touch big/f*")
+
+        (big / "f500").write_text("")
+
+        self.assertDenied("touch big/f*")
+
+    def test_every_ask_reason_is_shown_once_in_order(self):
+        ask = self.verdict("touch CLAUDE.md && touch deploy/x && touch CLAUDE.md && git push").ask
+
+        self.assertIsNotNone(ask)
+        self.assertEqual(ask.count("'CLAUDE.md'"), 1)
+        self.assertLess(ask.index("'CLAUDE.md'"), ask.index("'deploy/x'"))
+        self.assertLess(ask.index("'deploy/x'"), ask.index("push"))
+
+        many = self.verdict("touch deploy/a deploy/b deploy/c deploy/d deploy/e deploy/f deploy/g").ask
+        self.assertIn("'deploy/e'", many)
+        self.assertNotIn("'deploy/f'", many)
+        self.assertIn("and 2 more", many)
+
+    def test_the_ask_reason_is_capped_and_sanitised(self):
+        ask = self.verdict('touch "deploy/' + "x" * 300 + '"').ask
+        self.assertIsNotNone(ask)
+        self.assertNotIn("x" * 130, ask)
+
+        crafted = self.verdict('touch "deploy/a\nSECOND LINE\x1b31m b"').ask
+        self.assertIsNotNone(crafted)
+        for bad in ("\n", "\x1b", " ", "\r"):
+            self.assertNotIn(bad, crafted)
+
+
+class RedirectHookProcess(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="guard-redirect-"))
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "protected-paths.txt").write_text("deploy/**\nCLAUDE.md\n")
+
+    def run_hook(self, command):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.repo)}
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                              env={"CLAUDE_PROJECT_DIR": str(self.repo), "PATH": "/usr/bin"})
+
+    def test_a_redirect_into_the_rules_exits_2_and_into_protected_code_asks(self):
+        blocked = self.run_hook("echo x > .claude/settings.json")
+        self.assertEqual(blocked.returncode, 2)
+        self.assertIn(".claude", blocked.stderr)
+
+        asked = self.run_hook("echo x > CLAUDE.md")
+        self.assertEqual((asked.returncode, asked.stderr), (0, ""))
+        decision = json.loads(asked.stdout)["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "ask")
+        self.assertIn("CLAUDE.md", decision["permissionDecisionReason"])
+
+        quiet = self.run_hook("echo x > notes.txt 2>&1")
+        self.assertEqual((quiet.returncode, quiet.stdout), (0, ""))
 
 
 if __name__ == "__main__":

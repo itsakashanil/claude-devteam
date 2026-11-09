@@ -170,8 +170,13 @@ class Agents(unittest.TestCase):
         self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
         self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
 
-    def test_the_plugin_version_is_0_7_0(self):
-        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.7.0")
+    def test_the_plugin_version_is_0_8_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.8.0")
+
+    def test_the_readme_states_the_write_target_rule(self):
+        flat = " ".join((ROOT / "README.md").read_text().split())
+        for phrase in ("redirections", "write the literal path", ".git/hooks", "wildcard", "symlink"):
+            self.assertIn(phrase, flat, phrase)
 
     def test_the_readme_states_the_current_version(self):
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
@@ -496,7 +501,7 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t15_the_readme_lists_the_proposal_template_and_its_limits(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
-        for phrase in ("v0.7.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
+        for phrase in ("v0.8.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
             self.assertIn(phrase, flat, phrase)
 
     def test_r2_the_manager_checks_the_reviewed_line_and_the_boss_is_told_to_compare_it(self):

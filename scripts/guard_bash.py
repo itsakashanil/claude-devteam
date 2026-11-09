@@ -27,6 +27,8 @@ line (python -c, a script file) is beyond what a text check can see. The real bo
 
 from __future__ import annotations
 
+import glob
+import itertools
 import json
 import os
 import re
@@ -37,6 +39,9 @@ from pathlib import Path, PurePosixPath
 
 DEPLOYER = "deployer"
 MAX_DEPTH = 6
+MAX_GLOB_MATCHES = 500
+MAX_ASKS_SHOWN = 5
+MAX_SHOWN_LENGTH = 120
 PROFILE = ".claude/project-profile.md"
 
 PUNCTUATION = "();<>|&\n"
@@ -48,6 +53,13 @@ DELETERS = {"rm", "rmdir", "unlink", "shred"}
 WRITERS = DELETERS | {"cp", "mv", "install", "ln", "rsync", "tee", "truncate", "dd", "touch", "chmod", "chown", "mkdir", "patch"}
 FIND_ACTIONS = {"-delete", "-exec", "-execdir", "-ok", "-okdir"}
 GLOB_CHARS = set("*?[")
+# Redirections: the operators that write a file, and the ones that only read (their operand is dropped, not checked).
+WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>", "<>", ">&"}
+READ_REDIRECTS = {"<", "<<", "<<-", "<<<", "<&"}
+REDIRECTS = WRITE_REDIRECTS | READ_REDIRECTS
+PUNCTUATION_PIECES = re.compile(r"<\(|>\(|&>>|&>|<>|>>|>\||>&|<<<|<<-?|<&|[;&|()\n<>]")
+# Commands that replace or remove the name itself: a symlink target is not followed. Everything else writes through a link.
+NO_FOLLOW = {"rm", "rmdir", "unlink", "mv", "ln"}
 HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 
 
@@ -72,6 +84,10 @@ class Unparseable(Exception):
     pass
 
 
+class Unresolvable(Exception):
+    """A write target the guard cannot work out (the shell would decide), so the command is blocked."""
+
+
 # --- reading the command ---------------------------------------------------------------------------
 
 def tokenize(command: str) -> list[list[str]]:
@@ -88,11 +104,42 @@ def tokenize(command: str) -> list[list[str]]:
 
     commands: list[list[str]] = [[]]
     for token in tokens:
-        if set(token) <= SEPARATOR_CHARS:
-            commands.append([])
-        else:
-            commands[-1].append(token)
+        pieces = PUNCTUATION_PIECES.findall(token) if set(token) <= set(PUNCTUATION) else [token]
+        for piece in pieces:
+            if set(piece) <= SEPARATOR_CHARS:
+                commands.append([])
+            else:
+                commands[-1].append(piece)  # Words, and redirection operators (taken out by split_redirections).
     return [c for c in commands if c]
+
+
+def split_redirections(tokens: list[str]) -> tuple[list[str], list[str], str | None]:
+    """Takes redirections out of one simple command. Returns (the words left, every file written, a problem).
+
+    A write operator with no target is a problem (fail closed). A number just before an operator is a file
+    descriptor and is dropped. Read operators and here-docs are removed with their operand. `>&word` writes a
+    file unless the word is a number or `-`. T-003 can reuse this to find every write target of a command."""
+    kept: list[str] = []
+    targets: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token not in REDIRECTS:
+            kept.append(token)
+            index += 1
+            continue
+        if kept and kept[-1].isdigit():
+            kept.pop()
+        operand = tokens[index + 1] if index + 1 < len(tokens) else None
+        if operand in REDIRECTS:
+            operand = None
+        index += 2 if operand is not None else 1
+        if token in WRITE_REDIRECTS:
+            if operand is None:
+                return kept, targets, "a redirection has no target the guard can read; write the file name right after it"
+            if not (token == ">&" and re.fullmatch(r"\d+-?|-", operand)):
+                targets.append(operand)
+    return kept, targets, None
 
 
 def split_heredocs(command: str) -> tuple[str, list[str]]:
@@ -236,7 +283,25 @@ def evaluate_full(command: str, ctx: Context) -> Verdict:
     except Unparseable:
         return Verdict(deny="the command could not be parsed safely (unbalanced quotes or brackets?); rewrite it more simply")
 
-    return Verdict(ask=state["asks"][0] if state["asks"] else None)
+    return Verdict(ask=join_asks(state["asks"]))
+
+
+def join_asks(asks: list[str]) -> str | None:
+    """Every different reason once, in order, at most MAX_ASKS_SHOWN of them, so the boss sees what he approves."""
+    unique = list(dict.fromkeys(asks))
+    if not unique:
+        return None
+    shown = "; ".join(unique[:MAX_ASKS_SHOWN])
+    hidden = len(unique) - MAX_ASKS_SHOWN
+    return f"{shown}; and {hidden} more" if hidden > 0 else shown
+
+
+def quoted(text: str) -> str:
+    """Text taken from the command, made safe to show in a prompt: control characters removed, cut short, quoted."""
+    clean = "".join(char for char in text if char.isprintable())
+    if len(clean) > MAX_SHOWN_LENGTH:
+        clean = clean[:MAX_SHOWN_LENGTH] + "..."
+    return f"'{clean}'"
 
 
 def evaluate(command: str, ctx: Context) -> str | None:
@@ -264,7 +329,14 @@ def check_script(script: str, ctx: Context, state: dict) -> str | None:
 
 def check_commands(commands: list[list[str]], ctx: Context, state: dict) -> str | None:
     for tokens in commands:
-        reason = check_one(unwrap(tokens), ctx, state)
+        words, targets, problem = split_redirections(tokens)
+        if problem:
+            return problem
+        for target in targets:
+            reason = control_check(target, ctx, state)  # A redirection writes through a symlink.
+            if reason:
+                return reason
+        reason = check_one(unwrap(words), ctx, state)
         if reason:
             return reason
     return None
@@ -281,6 +353,10 @@ def check_one(tokens: list[str], ctx: Context, state: dict) -> str | None:
 
     if program in {"cd", "pushd"}:
         state["cwd"] = next_directory(args, state["cwd"])
+        return None
+
+    if program == "popd":
+        state["cwd"] = None  # The directory stack is not tracked, so where we are is unknown from here on.
         return None
 
     if program in SHELLS or program == "eval":
@@ -408,6 +484,8 @@ def allowed_target(path: str, ctx: Context, cwd: str | None, root_ok: bool = Fal
 
     if path.startswith("~"):
         path = os.path.expanduser(path)
+        if path.startswith("~"):
+            return False  # ~+, ~- or an unknown user: left as written, it would be read against the hook's own directory.
     elif not path.startswith("/"):
         if cwd is None:
             return False
@@ -458,10 +536,11 @@ def next_directory(args: list[str], cwd: str | None) -> str | None:
     if not targets:
         return os.path.expanduser("~")
     target = targets[0]
-    if target == "-" or "$" in target or GLOB_CHARS & set(target):
+    if target == "-" or target.startswith("+") or "$" in target or "`" in target or "{" in target or GLOB_CHARS & set(target):
         return None
     if target.startswith("~"):
-        return os.path.normpath(os.path.expanduser(target))
+        expanded = os.path.expanduser(target)
+        return None if expanded.startswith("~") else os.path.normpath(expanded)
     if target.startswith("/"):
         return os.path.normpath(target)
     return os.path.normpath(os.path.join(cwd, target)) if cwd else None
@@ -470,48 +549,134 @@ def next_directory(args: list[str], cwd: str | None) -> str | None:
 # --- writing to the team's own rules and to protected code ------------------------------------------
 
 def check_writes(program: str, args: list[str], ctx: Context, state: dict) -> str | None:
-    targets = [a[3:] for a in args if a.startswith("of=")] if program == "dd" else path_arguments(args)
-    for target in targets:
-        reason = control_check(target, ctx, state)
+    follow = program not in NO_FOLLOW
+    for target in write_targets(program, args):
+        reason = control_check(target, ctx, state, follow=follow)
         if reason:
             return reason
     return None
 
 
-def repo_relative(path: str, ctx: Context, cwd: str | None) -> str | None:
-    """The path relative to the repo root, or None if it is outside the repo or cannot be worked out."""
-    if "$" in path or "`" in path:
-        return None
+def write_targets(program: str, args: list[str]) -> list[str]:
+    """Every word of the command that names a file it may write: plain arguments, `--opt=value` and `-tDIR` values,
+    dd's of=, and for sed -i only the files (its script and -e/-f values are not paths)."""
+    if program == "dd":
+        return [a[3:] for a in args if a.startswith("of=")]
+    if program == "sed":
+        return sed_files(args)
+
+    targets: list[str] = []
+    options_done = False
+    for arg in args:
+        attached = re.fullmatch(r"-[A-Za-z]*t(.+)", arg)
+        if not options_done and arg == "--":
+            options_done = True
+        elif not options_done and arg.startswith("--") and "=" in arg:
+            targets.append(arg.split("=", 1)[1])
+        elif not options_done and attached:
+            targets.append(attached.group(1))
+        elif not options_done and arg.startswith("-"):
+            continue
+        else:
+            targets.append(arg)
+    return targets
+
+
+def sed_files(args: list[str]) -> list[str]:
+    files: list[str] = []
+    script_seen, options_done, skip_next = False, False, False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+        elif options_done or not arg.startswith("-"):
+            if script_seen:
+                files.append(arg)
+            else:
+                script_seen = True  # The first plain word is the script when no -e or -f was given.
+        elif arg == "--":
+            options_done = True
+        elif arg in {"-e", "-f", "--expression", "--file"} or re.fullmatch(r"-[A-HJ-Za-hj-z]*[ef]", arg):
+            script_seen, skip_next = True, True
+        elif arg.startswith(("-e", "-f", "--expression=", "--file=")):
+            script_seen = True
+    return files
+
+
+def absolute_target(path: str, cwd: str | None) -> str:
+    """The absolute text of a write target, or Unresolvable when the shell (not us) would decide what it means:
+    a variable, backtick, brace list, bracket class, ~+ or ~-, or a relative path after a cd we cannot follow."""
+    if "$" in path or "`" in path or "[" in path or ("{" in path and path != "{}"):  # {} is find -exec's own marker.
+        raise Unresolvable()
     if path.startswith("~"):
-        path = os.path.expanduser(path)
-    elif not path.startswith("/"):
-        if cwd is None:
-            return None
-        path = os.path.join(cwd, path)
+        expanded = os.path.expanduser(path)
+        if expanded.startswith("~"):
+            raise Unresolvable()
+        return expanded
+    if path.startswith("/"):
+        return path
+    if cwd is None:
+        raise Unresolvable()
+    return os.path.join(cwd, path)
 
-    parts = path.split("/")
-    cut = next((i for i, part in enumerate(parts) if GLOB_CHARS & set(part)), None)
-    if cut is not None:
-        path = "/".join(parts[:cut]) or "/"
 
-    resolved = resolve(path)
+def repo_relatives(path: str, ctx: Context, cwd: str | None, follow: bool = True) -> list[str]:
+    """Every place inside the repo (relative to its root, "" for the root) this write target can reach.
+
+    `*` and `?` are expanded on disk (hidden names included, at most MAX_GLOB_MATCHES matches), and the part before
+    the first wildcard is checked too. With follow, a symlink as the last name counts as what it points to."""
+    absolute = absolute_target(path, cwd)
     repo = os.path.realpath(ctx.repo)
-    if resolved == repo:
-        return ""
-    return resolved[len(repo) + 1:] if resolved.startswith(repo + "/") else None
+    parts = absolute.split("/")
+    cut = next((i for i, part in enumerate(parts) if GLOB_CHARS & set(part)), None)
+
+    candidates = [absolute]
+    if cut is not None:
+        prefix = "/".join(parts[:cut]) or "/"
+        candidates = [prefix]
+        real_prefix = os.path.realpath(prefix)
+        can_reach_repo = real_prefix == "/" or repo == real_prefix or repo.startswith(real_prefix + "/") or real_prefix.startswith(repo + "/")
+        if can_reach_repo:  # A wildcard somewhere that cannot lead into the repo needs no expansion.
+            found = list(itertools.islice(glob.iglob(absolute, include_hidden=True), MAX_GLOB_MATCHES + 1))
+            if len(found) > MAX_GLOB_MATCHES:
+                raise Unresolvable()
+            candidates += found
+
+    places: list[str] = []
+    for candidate in candidates:
+        for resolved in dict.fromkeys([resolve(candidate), os.path.realpath(candidate)] if follow else [resolve(candidate)]):
+            if resolved == repo:
+                places.append("")
+            elif resolved.startswith(repo + "/"):
+                places.append(resolved[len(repo) + 1:])
+    return places
 
 
-def control_check(path: str, ctx: Context, state: dict, searching: bool = False) -> str | None:
-    """Deny anything under .claude/; ask the boss about protected paths."""
-    relative = repo_relative(path, ctx, state["cwd"])
-    if relative is None:
-        return None
+def is_git_internal(relative: str) -> bool:
+    """.git/hooks and .git/config: a planted hook or alias can push where this guard never sees it."""
+    return relative in {".git/config", ".git/hooks"} or relative.startswith(".git/hooks/")
 
-    if relative == ".claude" or relative.startswith(".claude/"):
-        return "the team's own rules under .claude/ cannot be changed from the shell; only the boss edits them"
 
-    if not searching and is_protected(relative, ctx.protected):
-        state["asks"].append(f"{relative} is security-sensitive code (gate 3): the boss must approve changes to it")
+def control_check(path: str, ctx: Context, state: dict, searching: bool = False, follow: bool = True) -> str | None:
+    """Deny anything under .claude/ and shell writes into .git/hooks and .git/config; ask the boss about protected
+    paths; deny a target that cannot be worked out (fail closed)."""
+    try:
+        relatives = repo_relatives(path, ctx, state["cwd"], follow=follow)
+    except Unresolvable:
+        return (
+            f"cannot tell where the write target {quoted(path)} points (a variable, backtick, brace list, bracket class, "
+            "~+ or ~-, a path after a cd the guard cannot follow, or more than 500 wildcard matches); write the literal path"
+        )
+
+    for relative in relatives:
+        if relative == ".claude" or relative.startswith(".claude/"):
+            return "the team's own rules under .claude/ cannot be changed from the shell; only the boss edits them"
+        if is_git_internal(relative):
+            return "shell writes into .git/hooks and .git/config are blocked: a planted hook could push where the guard cannot see"
+
+    if not searching:
+        for relative in relatives:
+            if is_protected(relative, ctx.protected):
+                state["asks"].append(f"{quoted(relative)} is security-sensitive code (gate 3): the boss must approve changes to it")
     return None
 
 

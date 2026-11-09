@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.7.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.8.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -14,7 +14,7 @@ Status: v0.7.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `/devteam:status` | Summarises `docs/BACKLOG.md`: in progress, blocked, waiting for you, agent-run budget. |
 | 6 agents | manager, planner, builder, tester (sonnet, runs and reads only, never edits files), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
 | Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
-| Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. |
+| Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. Write targets: redirections (`>`, `>>`, `&>` and the rest) are checked like `cp` and `tee`; a target the hook cannot work out (a `$` variable, backtick, `{a,b}` list, `[...]` class, `~+`, `~-`, or a relative path after a `cd` it cannot follow) is blocked with "write the literal path"; wildcards are expanded on disk and every match is checked (more than 500 matches is blocked); a symlink as a write target is followed; shell writes into `.git/hooks` and `.git/config` are blocked. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
 
