@@ -19,9 +19,12 @@ Status: v0.6.0, MIT licensed. Built for one project (a home-lab bot) and general
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
 
 ## The gates
-1. **Plan approval**: nothing is built until you approve the planner's plan.
-2. **Production deploy**: the deployer builds and says "ready to deploy <version>". By default **you** run the deploy and reply "deployed";
-   the deployer then verifies that the running artifact is the one you approved and sends you a summary with a link to the report.
+1. **Plan approval**: nothing is built until you approve the planner's plan. The question quotes every `Method:` line of the plan and the
+   plan's hash. To audit it, compare `git hash-object .team-work/<id>/plan.md` with the hash in the gate 1 question. Any change to the plan
+   after approval voids those methods until you approve again, even a mechanical change.
+2. **Production deploy**: the deployer builds and says "ready to deploy <version>". The manager always asks this question (in the terminal, and
+   through the channel with a code when the channel is on), and "deployed" is its own question (a fresh code through the channel, none in the
+   terminal). By default **you** run the deploy and reply "deployed"; tell the manager before you start, it confirms "paused". The deployer then verifies that the running artifact is the one you approved and sends you a summary with a link to the report.
 3. **Security-sensitive code**: edits to the paths you list in `.claude/protected-paths.txt` raise a permission prompt for you.
 
 Besides these three, you are also asked before any push, share or upload, for a fix-round exception and for a review waiver.
@@ -68,14 +71,14 @@ your user: the session transcript on disk still holds it.
 
 Check who the channel lets in before you rely on it. This assumes `TELEGRAM_STATE_DIR` and `CLAUDE_CONFIG_DIR` are unset (otherwise
 read the path from them) and that the channel plugin keeps its allow list in `access.json` under `~/.claude/channels/telegram/`; adjust the
-path if your channel stores it elsewhere. It prints the allowed sender IDs: only your ID should appear, the same one as `boss_channel_user_id`.
+path if your channel stores it elsewhere. It prints the allowed sender IDs and the DM policy: only your ID should appear, the same one as `boss_channel_user_id`, and `dmPolicy` should be `allowlist`.
 
 ```bash
-python3 -I -c "import json, pathlib; p = pathlib.Path.home() / '.claude' / 'channels' / 'telegram' / 'access.json'; print(json.loads(p.read_text()).get('allowFrom'))"
+python3 -I -c "import json, pathlib; p = pathlib.Path.home() / '.claude' / 'channels' / 'telegram' / 'access.json'; d = json.loads(p.read_text()); print(d.get('allowFrom'), d.get('dmPolicy'))"
 ```
 
 While a task waits for you, the manager may work on an independent task (no shared files, its own branch, its own gate 1, at most one,
-up to review). It stops when you start an install or deploy.
+up to review). It stops when you tell it you are starting an install or deploy.
 
 ## The project profile
 Everything project-specific lives in `.claude/project-profile.md` (template: `templates/project-profile.md`): build and test commands,
