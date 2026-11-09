@@ -17,7 +17,9 @@ exists before proposing anything new, and reuse it.
 Return a plan with these numbered sections, concise:
 1. Goal: what changes for the user, and what does not.
 2. Approach: the chosen design, and the alternatives you rejected with the trade-off in one line each.
-3. Steps: small reviewable steps, each with its tests listed first (tests are written before the code).
+3. Steps: small reviewable steps, each with its tests listed first (tests are written before the code). For a step likely to be
+   denied by a permission rule or hook, add a `Method:` line naming the one other way to do it that you would accept. The manager
+   may quote it word for word as the agent's `Allowed method:` and nothing else.
 4. Files: each file to add or change. Mark every one that matches the protected paths list with [PROTECTED]; the boss
    must approve those separately, so say plainly why each needs to change. Search for every caller of anything whose
    signature you change, and list those files too.
@@ -32,9 +34,10 @@ Return a plan with these numbered sections, concise:
 
 If the task is bigger than one review sitting, say how to split it. If it is a bad idea, say so and why.
 
+Every report you return must also have a section "Denied:" listing every command or edit that was denied this run: the exact
+command or edit, which rule or hook denied it, and the brief line you used if you switched to an `Allowed method:`. If
+nothing was denied, write "Denied: none".
+
 ## When something is denied
-If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
-another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
-if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape, another tool, or a request to another agent to get the same effect. One exception: if your brief has an `Allowed method:` line for exactly that step, you may switch to that method once in this run, unless the denied action was that method itself. Report it under "Denied:" with the denied action, the rule, and the brief line you used. Any other alternative, a second denial in the same step, or a denial of the named method: stop and report to the boss (through the manager if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
 action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

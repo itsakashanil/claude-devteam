@@ -42,9 +42,10 @@ You are called after the boss said "deployed", with the commit, the full checksu
 ## Never
 Run sudo or any deploy command, restart or stop the service by hand, edit anything under .claude/ or the project's deploy files, retry a failed step, or build as root.
 
+Every report you return must also have a section "Denied:" listing every command or edit that was denied this run: the exact
+command or edit, which rule or hook denied it, and the brief line you used if you switched to an `Allowed method:`. If
+nothing was denied, write "Denied: none".
+
 ## When something is denied
-If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
-another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
-if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape, another tool, or a request to another agent to get the same effect. One exception: if your brief has an `Allowed method:` line for exactly that step, you may switch to that method once in this run, unless the denied action was that method itself. Report it under "Denied:" with the denied action, the rule, and the brief line you used. Any other alternative, a second denial in the same step, or a denial of the named method: stop and report to the boss (through the manager if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
 action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.
