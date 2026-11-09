@@ -680,10 +680,10 @@ class DenialAndChannelGates(unittest.TestCase):
 
     def test_gate_1_quotes_every_method_line_and_brief_lines_need_the_hash(self):
         text = flat(AGENTS["manager"])
-        for phrase in ("the gate 1 question quotes every `Method:` line of the plan word for word",
+        for phrase in ("The gate 1 question quotes every `Method:` line of the plan word for word",
                        "An `Allowed method:` line needs the same check as the rerun",
                        "`git hash-object .team-work/<task-id>/plan.md` still equals the hash recorded at gate 1",
-                       "an `Allowed method:` line names the step it belongs to",
+                       "An `Allowed method:` line names the step it belongs to",
                        "Any change to plan.md after gate 1 voids every `Method:` line",
                        "no `Allowed method:` lines, no reruns", "until the boss approves the changed plan",
                        "even a mechanical plan change does this"):
