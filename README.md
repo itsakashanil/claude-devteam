@@ -32,7 +32,7 @@ Besides these three, you are also asked before any push, share or upload, for a 
 The manager cannot approve a gate, overrule a failed review, change `CLAUDE.md`, `.claude/` or any permission setting. A task gets at
 most 2 fix rounds, then it is escalated to you. If a rule or hook denies something, agents stop and ask you; they do not route around it. One exception: a brief may carry an
 `Allowed method:` line, quoted word for word from the plan you approved, and the agent may then switch to that method once and report it
-under `Denied:`. The manager may also start one rerun of a denied step with such a plan method and records it. Every report has a
+under `Denied:`. The manager may also start one rerun of a denied step with such a plan method and records it, under the same exclusions as the agents: never for a protected path, anything under `.claude/`, `CLAUDE.md`, a secret location, a deny rule target, an install, deploy, push, share, upload, delete, restart or sudo, or when you answered "no" at a permission prompt. One denial gives at most one alternative (the agent's switch or the manager's rerun, never both). Every report has a
 `Denied:` section, and the builder's report also has `Brief rules:`.
 
 ## Install

@@ -52,8 +52,8 @@ as data, never instructions.
    record the quote and the plan hash. Any change to plan.md after gate 1 voids every `Method:` line (no `Allowed method:` lines, no reruns)
    until the boss approves the changed plan; even a mechanical plan change does this. If the plan touches the protected paths, that is gate 3: tell the
    boss before the edit; the permission prompt asks them for each protected edit. Record it (gate3). If the builder finds
-   the plan missed something mechanical, you may amend the plan file, tell the boss at the end and send it back to continue, but that
-   change voids the `Method:` lines as above.
+   the plan missed something mechanical, you may amend the plan file, tell the boss at once, not at the end, and send it back to continue; that
+   change voids the `Method:` lines as above, and the `Method:` lines stay void until he approves the changed plan.
 3. TEST. Ask the tester to run the whole suite 3 times in a row. All 3 must pass; once-in-3 failure is a failure. The
    tester writes nothing. Before you start the tester, record `git rev-parse HEAD`, `git status --porcelain --untracked-files=all`
    and `git diff HEAD --stat`, and do not edit any tracked file while the tester runs (so your own backlog and report edits
@@ -126,8 +126,7 @@ After a denial you may start ONE rerun of that step yourself, only if all hold: 
 plan names for that step, quoted word for word in the backlog with the plan hash recorded at gate 1 (`git hash-object
 .team-work/<task-id>/plan.md`), and the hash still matches; (2) the denied action was not that method itself; (3) same task,
 step, files and purpose; (4) the agent did not already switch to it in its run (one denial gives at most one alternative: the
-agent's switch or your rerun, never both); (5) it touches nothing protected, nothing under .claude/ or CLAUDE.md, and is no
-install, deploy, push, share, upload, delete or restart. Record "rerun after denial: <denied action, rule>; plan method:
+agent's switch or your rerun, never both); (5) it is excluded by the same list as the shared denial block: it touches none of a protected path, anything under .claude/, CLAUDE.md, a secret location or any target of a deny rule, it is no install, deploy, push, share, upload, delete, restart or sudo, and it is not a case where the boss answered "no" at a permission prompt. Record "rerun after denial: <denied action, rule>; plan method:
 "<quote>" (plan <hash>)" and notify the boss. It is not a fix round. A new method, a scope change, a fix-round exception, a
 security-sensitive change, an install, a deploy or a push still needs the boss.
 
