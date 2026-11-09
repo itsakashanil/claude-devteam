@@ -170,8 +170,8 @@ class Agents(unittest.TestCase):
         self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
         self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
 
-    def test_the_plugin_version_is_0_6_0(self):
-        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.6.0")
+    def test_the_plugin_version_is_0_7_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.7.0")
 
     def test_the_readme_states_the_current_version(self):
         plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
@@ -496,7 +496,7 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t15_the_readme_lists_the_proposal_template_and_its_limits(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
-        for phrase in ("v0.6.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
+        for phrase in ("v0.7.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
             self.assertIn(phrase, flat, phrase)
 
     def test_r2_the_manager_checks_the_reviewed_line_and_the_boss_is_told_to_compare_it(self):
@@ -554,7 +554,7 @@ class DenialAndChannelGates(unittest.TestCase):
         text = flat(AGENTS["manager"])
         for phrase in ("ONE rerun", "quoted word for word in the backlog", "the hash still matches",
                        "the denied action was not that method itself", "did not already switch to it in its run",
-                       "the same list as the shared denial block",
+                       "falls under the shared denial block's exclusions",
                        "rerun after denial:", "It is not a fix round"):
             self.assertIn(phrase, text, phrase)
 
@@ -708,16 +708,27 @@ class DenialAndChannelGates(unittest.TestCase):
                        "git hash-object .team-work/<id>/plan.md", "the hash in the gate 1 question", "dmPolicy", "allowlist"):
             self.assertIn(phrase, text, phrase)
 
-    def test_r2_rerun_condition_5_has_the_full_exclusion_list(self):
+    @staticmethod
+    def condition_5_items():
+        """The exclusion list of rerun condition (5), split into whole phrases, and the sentence it opens with."""
         text = flat(AGENTS["manager"])
         cond = text.split("(5) ", 1)[1].split(' Record "rerun after denial', 1)[0]
-        self.assertIn("the same list as the shared denial block", cond)
-        for item in ("a protected path", "anything under .claude/", "CLAUDE.md", "a secret location", "any target of a deny rule",
-                     "install", "deploy", "push", "share", "upload", "delete", "restart", "sudo",
-                     'the boss answered "no" at a permission prompt'):
-            self.assertIn(item, cond, item)
+        opening, listing = cond.split("exclusions: ", 1)
+        rest, boss = listing.removesuffix(".").split(", or a case where ", 1)
+        items = [i.strip().removeprefix("an ") for i in rest.replace(" or ", ", ").split(", ")] + [boss.strip()]
+        return opening + "exclusions: ", items
 
-    def test_r2_every_shared_block_exclusion_is_in_condition_5(self):
+    def test_r2_rerun_condition_5_applies_the_shared_exclusions_to_the_denied_action_and_the_rerun(self):
+        opening, items = self.condition_5_items()
+        self.assertEqual(opening, "neither the denied action nor the rerun falls under the shared denial block's exclusions: ")
+        self.assertEqual(
+            items,
+            ["a protected path", "anything under .claude/", "CLAUDE.md", "a secret location", "any target of a deny rule",
+             "install", "deploy", "push", "share", "upload", "delete", "restart", "sudo",
+             'the boss answered "no" at a permission prompt'],
+        )
+
+    def test_r2_every_shared_block_exclusion_is_in_condition_5_as_a_whole_phrase(self):
         block = flat(denial_block(AGENTS["builder"]))
         sentence = block.split("Never switch when the denied action or the method touches ", 1)[1].split(": then stop and report", 1)[0]
         head, tail = sentence.split(", or is an ", 1)
@@ -725,10 +736,8 @@ class DenialAndChannelGates(unittest.TestCase):
         acts, boss = tail.split(", or when the boss", 1)
         items += [i.strip() for i in acts.replace(" or ", ", ").split(", ")] + ["the boss" + boss]
         self.assertGreaterEqual(len(items), 12)
-        text = flat(AGENTS["manager"])
-        cond = text.split("(5) ", 1)[1].split(' Record "rerun after denial', 1)[0]
-        for item in items:
-            self.assertIn(item.removeprefix("install, ").removeprefix("an "), cond, item)
+        _, listed = self.condition_5_items()
+        self.assertEqual(listed, items, "the manager's rerun exclusions drifted from the shared denial block")
 
     def test_r2_readme_shows_rerun_exclusions_and_one_alternative(self):
         text = flat((ROOT / "README.md").read_text())
@@ -746,6 +755,33 @@ class DenialAndChannelGates(unittest.TestCase):
         self.assertIn("tell the boss at once, not at the end", text)
         self.assertIn("the `Method:` lines stay void until he approves the changed plan", text)
         self.assertNotIn("tell the boss at the end", text)
+
+
+class PushAsksAndReapproval(unittest.TestCase):
+    """T-007c: pushes ask the boss in the permission prompt; a changed plan is re-hashed before it is put to the boss."""
+
+    def test_a_changed_plan_is_hashed_before_asking_and_the_question_carries_hash_and_methods(self):
+        text = flat(AGENTS["manager"])
+        for phrase in (
+            "When a changed plan needs the boss's approval again, run `git hash-object .team-work/<task-id>/plan.md` before asking, "
+            "put the new hash and every `Method:` line in that question, and record the hash in the backlog when the boss approves.",
+        ):
+            self.assertIn(phrase, text, phrase)
+
+    def test_the_readme_says_a_push_asks_the_boss_and_what_the_hook_cannot_see(self):
+        text = flat((ROOT / "README.md").read_text())
+        for phrase in (
+            "**Pushes ask you.**",
+            "a push asks you in the permission prompt after the coded gate",
+            "the hook sees only a `git push` typed through the Bash tool, not a script, `gh` or `curl`",
+            "check once, live, that the prompt also appears in auto mode",
+        ):
+            self.assertIn(phrase, text, phrase)
+
+    def test_the_hook_header_says_a_clean_push_asks(self):
+        header = (ROOT / "scripts" / "guard_bash.py").read_text().split('"""')[1]
+        self.assertIn("asks the boss", flat(header))
+        self.assertIn("scan", flat(header))
 
 
 if __name__ == "__main__":

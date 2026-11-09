@@ -272,5 +272,97 @@ class PrePushScan(unittest.TestCase):
             self.assertEqual(self.push(command).returncode, 0, command)
 
 
+class PushAsksTheBoss(unittest.TestCase):
+    """T-007c: a push that is allowed and has a clean scan still asks the boss in the permission prompt (gate)."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="devteam-ask-"))
+        self.addCleanup(shutil.rmtree, self.repo, True)
+        git = lambda *a: subprocess.run(["git", "-C", str(self.repo), *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q", "-b", "main")
+        (self.repo / "app.txt").write_text("hello\n")
+        git("add", "-A")
+
+    def verdict(self, command, agent_type=None):
+        ctx = g.Context(
+            repo=str(self.repo), cwd=str(self.repo), agent_type=agent_type, scratchpad=SCRATCH, publish_dir=PUBLISH,
+            protected=PROTECTED, secret_paths=SECRETS,
+        )
+        return g.evaluate_full(command, ctx)
+
+    def run_hook(self, command, agent_type=None):
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.repo), "agent_type": agent_type}
+        return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                              env={"CLAUDE_PROJECT_DIR": str(self.repo), "PATH": "/usr/bin"})
+
+    def test_plain_push_asks(self):
+        for command in (
+            "git push",
+            "git push -u origin feature",
+            "git -C . push",
+            "env git push",
+            'bash -c "git push"',
+            "cd x && git push",
+            "timeout 60 git push origin main",
+            "echo $(git push)",
+        ):
+            verdict = self.verdict(command)
+            self.assertIsNone(verdict.deny, command)
+            self.assertIsNotNone(verdict.ask, f"a push must ask the boss: {command!r}")
+            self.assertIn("push", verdict.ask, command)
+
+    def test_the_ask_is_the_documented_pretooluse_decision_and_the_call_is_not_blocked(self):
+        result = self.run_hook("git push")
+
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        decision = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(decision["hookEventName"], "PreToolUse")
+        self.assertEqual(decision["permissionDecision"], "ask")
+        self.assertIn("push", decision["permissionDecisionReason"])
+
+    def test_force_push_still_denied(self):
+        for command in ("git push --force", "git push -f", "git push origin +main", "git push --delete origin x", "git -C . push -f",
+                        "bash -c 'git push --mirror'"):
+            verdict = self.verdict(command)
+            self.assertIsNotNone(verdict.deny, command)
+            self.assertIsNone(verdict.ask, command)
+        result = self.run_hook("git push --force")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+
+    def test_scan_finding_denies_before_ask(self):
+        (self.repo / "r.md").write_text(f"{FAKE_TOKEN}\n")
+
+        verdict = self.verdict("git push")
+        result = self.run_hook("git push")
+
+        self.assertIsNotNone(verdict.deny)
+        self.assertIsNone(verdict.ask)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn(FAKE_TOKEN, result.stderr)
+
+    def test_other_git_never_asks(self):
+        for command in ("git status", "git commit -m x", "git commit -m 'git push later'", "git log --oneline", "git diff main...HEAD",
+                        "git branch -d old", "git fetch", "git pull", "echo git push", "git config alias.push x", "ls push"):
+            verdict = self.verdict(command)
+            self.assertIsNone(verdict.deny, command)
+            self.assertIsNone(verdict.ask, command)
+            result = self.run_hook(command)
+            self.assertEqual((result.returncode, result.stdout), (0, ""), command)
+
+    def test_push_ask_independent_of_agent_type(self):
+        for agent_type in (None, "builder", "manager", "devteam:builder", "deployer", "tester"):
+            self.assertIsNotNone(self.verdict("git push", agent_type).ask, str(agent_type))
+            decision = json.loads(self.run_hook("git push", agent_type).stdout)["hookSpecificOutput"]
+            self.assertEqual(decision["permissionDecision"], "ask", str(agent_type))
+
+    def test_a_protected_write_and_a_push_in_one_command_still_ask(self):
+        verdict = self.verdict("sed -i s/a/b/ CLAUDE.md && git push")
+
+        self.assertIsNone(verdict.deny)
+        self.assertIsNotNone(verdict.ask)
+
+
 if __name__ == "__main__":
     unittest.main()

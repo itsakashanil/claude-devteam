@@ -13,6 +13,7 @@ A JSON "ask" decision on stdout (exit 0) makes the permission prompt appear for 
      `protected_paths_file`) ask the boss first.
   4. git push: no force, delete or mirror pushes in any spelling, and a plain push runs the full-repo secret scan
      first (secret_scan.py, with the project's allow list for test fixtures) and is blocked on any finding or error.
+     A push that passes both checks still asks the boss in the permission prompt, for every agent.
   5. The project's secret locations (`secret_locations` in the profile) are never mentioned.
 
 It looks inside bash -c, env, timeout, xargs, find -exec, heredocs and command substitutions (including ones
@@ -538,7 +539,11 @@ def check_git(args: list[str], ctx: Context, state: dict) -> str | None:
             or arg.startswith(":")
         ):
             return "force, delete and mirror pushes are not allowed; ask the boss"
-    return push_scan(ctx)
+    reason = push_scan(ctx)
+    if reason:
+        return reason
+    state["asks"].append("git push shares work outside this machine (gate): the boss must approve this push")
+    return None
 
 
 def push_scan(ctx: Context) -> str | None:
