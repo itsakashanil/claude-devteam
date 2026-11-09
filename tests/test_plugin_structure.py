@@ -554,7 +554,7 @@ class DenialAndChannelGates(unittest.TestCase):
         text = flat(AGENTS["manager"])
         for phrase in ("ONE rerun", "quoted word for word in the backlog", "the hash still matches",
                        "the denied action was not that method itself", "did not already switch to it in its run",
-                       "touches nothing protected", "no install, deploy, push, share, upload, delete or restart",
+                       "the same list as the shared denial block",
                        "rerun after denial:", "It is not a fix round"):
             self.assertIn(phrase, text, phrase)
 
@@ -707,6 +707,45 @@ class DenialAndChannelGates(unittest.TestCase):
         for phrase in ("always asks this question", '"deployed" is its own question',
                        "git hash-object .team-work/<id>/plan.md", "the hash in the gate 1 question", "dmPolicy", "allowlist"):
             self.assertIn(phrase, text, phrase)
+
+    def test_r2_rerun_condition_5_has_the_full_exclusion_list(self):
+        text = flat(AGENTS["manager"])
+        cond = text.split("(5) ", 1)[1].split(' Record "rerun after denial', 1)[0]
+        self.assertIn("the same list as the shared denial block", cond)
+        for item in ("a protected path", "anything under .claude/", "CLAUDE.md", "a secret location", "any target of a deny rule",
+                     "install", "deploy", "push", "share", "upload", "delete", "restart", "sudo",
+                     'the boss answered "no" at a permission prompt'):
+            self.assertIn(item, cond, item)
+
+    def test_r2_every_shared_block_exclusion_is_in_condition_5(self):
+        block = flat(denial_block(AGENTS["builder"]))
+        sentence = block.split("Never switch when the denied action or the method touches ", 1)[1].split(": then stop and report", 1)[0]
+        head, tail = sentence.split(", or is an ", 1)
+        items = [i.strip() for i in head.split(", ")]
+        acts, boss = tail.split(", or when the boss", 1)
+        items += [i.strip() for i in acts.replace(" or ", ", ").split(", ")] + ["the boss" + boss]
+        self.assertGreaterEqual(len(items), 12)
+        text = flat(AGENTS["manager"])
+        cond = text.split("(5) ", 1)[1].split(' Record "rerun after denial', 1)[0]
+        for item in items:
+            self.assertIn(item.removeprefix("install, ").removeprefix("an "), cond, item)
+
+    def test_r2_readme_shows_rerun_exclusions_and_one_alternative(self):
+        text = flat((ROOT / "README.md").read_text())
+        for phrase in ("the same exclusions as the agents", "protected path", "secret location", "deny rule", "sudo",
+                       'answered "no"', "at most one alternative", "never both"):
+            self.assertIn(phrase, text, phrase)
+
+    def test_r2_deployer_prepare_does_not_ask_for_deployed_before_gate_2(self):
+        text = flat(AGENTS["deployer"])
+        self.assertNotIn("then \"reply deployed\"", text)
+        self.assertIn('"deployed" counts only after the boss approved gate 2', text)
+
+    def test_r2_plan_amendment_after_gate_1_is_told_at_once(self):
+        text = flat(AGENTS["manager"])
+        self.assertIn("tell the boss at once, not at the end", text)
+        self.assertIn("the `Method:` lines stay void until he approves the changed plan", text)
+        self.assertNotIn("tell the boss at the end", text)
 
 
 if __name__ == "__main__":
