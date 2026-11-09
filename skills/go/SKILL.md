@@ -1,5 +1,5 @@
 ---
-description: Give the dev team a goal. The manager breaks it into tasks and runs plan -> build -> test (3 runs) -> review -> hand-over to deploy, asking the boss only at the three gates.
+description: Give the dev team a goal. The manager breaks it into tasks and runs plan -> build -> test (3 runs) -> review -> hand-over to deploy, asking the boss only at the gates.
 argument-hint: <goal>
 disable-model-invocation: true
 ---

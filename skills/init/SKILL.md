@@ -10,7 +10,8 @@ that already exists: if a file is there, show the boss the difference and ask.
    script, where secrets live (paths only; never open or print a secret), and the git remote URL.
 2. Create `.claude/project-profile.md` from `${CLAUDE_PLUGIN_ROOT}/templates/project-profile.md`, filled in from what
    you found. Leave unknown values empty and say so. Ask the boss for anything you cannot find out: the deploy command,
-   the notify method, which paths are security-sensitive.
+   the notify method, which paths are security-sensitive, and (only if they attach a chat channel for approvals) their numeric
+   user ID on it, which goes into `boss_channel_user_id`; otherwise leave it empty. If they give an ID, point them to the access check in the README ("Approvals through a chat channel") to see who the channel lets in.
 3. Create `.claude/protected-paths.txt` from `${CLAUDE_PLUGIN_ROOT}/templates/protected-paths.txt` with your
    suggestions for this project, and ask the boss to confirm the list.
 4. Create `docs/BACKLOG.md` from the BACKLOG template, `docs/reports/INDEX.md` from the INDEX template, and add
@@ -33,7 +34,8 @@ that already exists: if a file is there, show the boss the difference and ask.
 7. Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py` over the whole project. For findings that are deliberate fakes in test
    fixtures, propose narrow allow-list lines (`<glob> <kind>`) for the boss to review and install as
    `.claude/secret-scan-allow.txt`; anything else is a real finding to fix. Every `git push` runs this scan again.
-8. Explain the three gates the boss will be asked at (plan approval, production deploy, security-sensitive changes)
+8. Explain the gates the boss will be asked at (plan approval, production deploy, security-sensitive changes, and any push,
+   share or upload, fix-round exception or review waiver)
    and that the next step is `/devteam:go <goal>`.
 
 If a permission rule or a hook denies something while you do this, do not rewrite it another way. Stop and ask the boss.

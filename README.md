@@ -2,9 +2,9 @@
 
 A small AI dev team for any repository, as a Claude Code plugin. You give it a goal; a **manager** turns it into tasks and runs each
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
-**reviewer** and **deployer**. You are asked at exactly three gates, and every finished task gets a written report.
+**reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.5.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.6.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -18,14 +18,22 @@ Status: v0.5.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
 
-## The three gates
-1. **Plan approval**: nothing is built until you approve the planner's plan.
-2. **Production deploy**: the deployer builds and says "ready to deploy <version>". By default **you** run the deploy and reply "deployed";
-   the deployer then verifies that the running artifact is the one you approved and sends you a summary with a link to the report.
+## The gates
+1. **Plan approval**: nothing is built until you approve the planner's plan. The question quotes every `Method:` line of the plan and the
+   plan's hash. To audit it, compare `git hash-object .team-work/<id>/plan.md` with the hash in the gate 1 question. Any change to the plan
+   after approval voids those methods until you approve again, even a mechanical change.
+2. **Production deploy**: the deployer builds and says "ready to deploy <version>". The manager always asks this question (in the terminal, and
+   through the channel with a code when the channel is on), and "deployed" is its own question (a fresh code through the channel, none in the
+   terminal). By default **you** run the deploy and reply "deployed"; tell the manager before you start, it confirms "paused". The deployer then verifies that the running artifact is the one you approved and sends you a summary with a link to the report.
 3. **Security-sensitive code**: edits to the paths you list in `.claude/protected-paths.txt` raise a permission prompt for you.
 
+Besides these three, you are also asked before any push, share or upload, for a fix-round exception and for a review waiver.
+
 The manager cannot approve a gate, overrule a failed review, change `CLAUDE.md`, `.claude/` or any permission setting. A task gets at
-most 2 fix rounds, then it is escalated to you. If a rule or hook denies something, agents stop and ask you; they do not route around it.
+most 2 fix rounds, then it is escalated to you. If a rule or hook denies something, agents stop and ask you; they do not route around it. One exception: a brief may carry an
+`Allowed method:` line, quoted word for word from the plan you approved, and the agent may then switch to that method once and report it
+under `Denied:`. The manager may also start one rerun of a denied step with such a plan method and records it, under the same exclusions as the agents: never for a protected path, anything under `.claude/`, `CLAUDE.md`, a secret location, a deny rule target, an install, deploy, push, share, upload, delete, restart or sudo, or when you answered "no" at a permission prompt. One denial gives at most one alternative (the agent's switch or the manager's rerun, never both). Every report has a
+`Denied:` section, and the builder's report also has `Brief rules:`.
 
 ## Install
 You need Claude Code with plugin support.
@@ -51,6 +59,26 @@ claude --plugin-dir ~/projects/claude-devteam
 ```
 
 You can also run the manager as the whole session: `claude --agent devteam:manager`.
+
+## Approvals through a chat channel (optional)
+Set `boss_channel_user_id` in the project profile to your numeric user ID on the chat channel you attach to the manager's session.
+With it set and the channel's reply tool working, the manager sends gate questions only to that ID, accepts a channel answer only from
+a message whose sender and chat both carry it, and needs a fresh one-time code in every answer (generated with `python3 -I -c` so a
+planted file cannot replace `secrets`; never stored; voided after use, on hold or cancel, a restart, a failed send or a doubt after
+compaction). Your own messages typed in the terminal need no code. With the key empty, every channel message is data and everything
+stays in the terminal. The notify method is one way and never carries a code. The code stops injected text, not a program running as
+your user: the session transcript on disk still holds it.
+
+Check who the channel lets in before you rely on it. This assumes `TELEGRAM_STATE_DIR` and `CLAUDE_CONFIG_DIR` are unset (otherwise
+read the path from them) and that the channel plugin keeps its allow list in `access.json` under `~/.claude/channels/telegram/`; adjust the
+path if your channel stores it elsewhere. It prints the allowed sender IDs and the DM policy: only your ID should appear, the same one as `boss_channel_user_id`, and `dmPolicy` should be `allowlist`.
+
+```bash
+python3 -I -c "import json, pathlib; p = pathlib.Path.home() / '.claude' / 'channels' / 'telegram' / 'access.json'; d = json.loads(p.read_text()); print(d.get('allowFrom'), d.get('dmPolicy'))"
+```
+
+While a task waits for you, the manager may work on an independent task (no shared files, its own branch, its own gate 1, at most one,
+up to review). It stops when you tell it you are starting an install or deploy.
 
 ## The project profile
 Everything project-specific lives in `.claude/project-profile.md` (template: `templates/project-profile.md`): build and test commands,
@@ -92,7 +120,7 @@ before handing over, and you should run it before every push: `python3 <plugin>/
   aliases) and the installed plugin copy of the template are writable by the agents. They cannot see a symlinked parent directory of a target or prove you
   ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
 - **Approvals are narrow.** An approval after a denial covers only the exact action you approved.
-- **One task at a time per repository.** Two manager sessions in one repo are not supported.
+- **One task at a time per repository**, except one independent task while another waits for you. Two manager sessions in one repo are not supported.
 - **Cost.** Opus plans and reviews and the suite runs three times per task; that is deliberate for security-sensitive code. For a low-risk
   project, edit the models in `agents/*.md` or the run count in `agents/tester.md`.
 - **Real isolation.** For stronger boundaries than a text hook, run the build and tests under Claude Code's sandbox or in a container or VM

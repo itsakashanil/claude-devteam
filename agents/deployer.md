@@ -25,7 +25,7 @@ first thing that is wrong.
 3. Record the build: a checksum of the main artifact (keep the first 12 characters and the full value) and the version
    string `<git short hash> <commit subject> (<checksum prefix>)`.
 4. Send the boss, with the profile's notify method, 3 to 5 short lines: `ready to deploy <version>`, the tests and review
-   results, and exactly what to run, then "reply deployed". If notification is not set up, report that to the manager.
+   results, and exactly what to run. Do not ask for "deployed" yet: "deployed" counts only after the boss approved gate 2 (the manager asks that question). If notification is not set up, report that to the manager.
 5. STOP. Return `READY_TO_DEPLOY <version>` and the full checksum to the manager. Do nothing else: the boss decides when.
 
 ## Mode VERIFY
@@ -42,9 +42,10 @@ You are called after the boss said "deployed", with the commit, the full checksu
 ## Never
 Run sudo or any deploy command, restart or stop the service by hand, edit anything under .claude/ or the project's deploy files, retry a failed step, or build as root.
 
+Every report you return must also have a section "Denied:" listing every command or edit that was denied this run: the exact
+command or edit, which rule or hook denied it, and the brief line you used if you switched to an `Allowed method:`. If
+nothing was denied, write "Denied: none".
+
 ## When something is denied
-If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
-another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
-if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape, another tool, or a request to another agent to get the same effect. One exception: if your brief has an `Allowed method:` line naming the step you are doing, you may switch to that method once in this run, unless the denied action was that method itself. Never switch when the denied action or the method touches a protected path, anything under .claude/, CLAUDE.md, a secret location, any target of a deny rule, or is an install, deploy, push, share, upload, delete, restart or sudo, or when the boss answered "no" at a permission prompt: then stop and report. One denial gives at most one alternative: if you switched, the manager may not rerun that step, and a rerun brief carries no `Allowed method:` line for that step. Report it under "Denied:" with the denied action, the rule, and the brief line you used. Any other alternative, a second denial in the same step, or a denial of the named method: stop and report to the boss (through the manager if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
 action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.

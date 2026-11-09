@@ -1,8 +1,8 @@
 {
   "name": "devteam",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "license": "MIT",
-  "description": "A small AI dev team for any repo: manager, planner, builder, tester, reviewer and deployer agents, three approval gates, a Bash guard hook, and a written report per task.",
+  "description": "A small AI dev team for any repo: manager, planner, builder, tester, reviewer and deployer agents, approval gates, a Bash guard hook, and a written report per task.",
   "author": {
     "name": "Akash Anil"
   },

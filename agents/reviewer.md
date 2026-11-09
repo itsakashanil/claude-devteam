@@ -45,9 +45,10 @@ differs from templates/proposal.md outside the filled-in values is a FAIL. The f
 variable lines (including MAIN) and MAP in step 0, the builder comment at the top (it must be deleted), BASE, the test command, override variables and expected count in step 4, and the What and Task
 lines. Also check that the MAP matches the files in the folder and that every source file is tracked.
 
+Every report you return must also have a section "Denied:" listing every command or edit that was denied this run: the exact
+command or edit, which rule or hook denied it, and the brief line you used if you switched to an `Allowed method:`. If
+nothing was denied, write "Denied: none".
+
 ## When something is denied
-If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape,
-another tool, or a request to another agent to get the same effect. Stop and report to the boss (through the manager
-if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a
-decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
+If a permission rule or a hook denies a command or an edit, do not rewrite it as a script, another command shape, another tool, or a request to another agent to get the same effect. One exception: if your brief has an `Allowed method:` line naming the step you are doing, you may switch to that method once in this run, unless the denied action was that method itself. Never switch when the denied action or the method touches a protected path, anything under .claude/, CLAUDE.md, a secret location, any target of a deny rule, or is an install, deploy, push, share, upload, delete, restart or sudo, or when the boss answered "no" at a permission prompt: then stop and report. One denial gives at most one alternative: if you switched, the manager may not rerun that step, and a rerun brief carries no `Allowed method:` line for that step. Report it under "Denied:" with the denied action, the rule, and the brief line you used. Any other alternative, a second denial in the same step, or a denial of the named method: stop and report to the boss (through the manager if you are not the manager): what was denied, why it is needed, and what you would do instead. A denial is a decision to raise, not an obstacle to route around. An approval the boss gives after a denial covers only the exact
 action they approved (that command or that edit, once). A different command, file, target or purpose needs a new approval.
