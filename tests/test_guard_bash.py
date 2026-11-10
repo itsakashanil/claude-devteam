@@ -68,11 +68,13 @@ class Quoting(Cases):
         self.blocked('X="`sudo id`"')
 
     def test_single_quotes_are_plain_text(self):
-        self.allowed("echo '$(sudo id)'")
+        self.blocked("echo '$(sudo id)'")  # Round 2: a quoted ( ) is refused, was allowed.
+        self.allowed("echo '`sudo id`'")
 
     def test_heredoc_bodies_are_data(self):
         self.allowed("cat <<'EOF'\nit's got 'quotes and sudo id\nEOF")
-        self.allowed('git commit -m "$(cat <<\'EOF\'\nfix: it\'s fine (really)\nEOF\n)"')
+        # Round 2: the substitution is inside double quotes, so its ( ) are quoted and refused (was allowed).
+        self.blocked('git commit -m "$(cat <<\'EOF\'\nfix: it\'s fine (really)\nEOF\n)"')
         self.blocked("cat <<EOF\n$(sudo id)\nEOF")
         self.blocked("cat <<'EOF'\nbody\nEOF\nsudo id")
 
@@ -421,12 +423,15 @@ class WriteTargets(Cases):
             "cat < .claude/settings.json",
             "sort < in.txt > out.txt",
             "cat <<< 'hello'",
-            "echo 'a > .claude/x'",
-            'git commit -m "x > y"',
             "echo hi > ~/notes.txt",
             "cat <<'EOF' > notes.txt\nhello\nEOF",
         ):
             self.quiet(command)
+        for command in (  # Round 2: a quoted > is refused, these were allowed.
+            "echo 'a > .claude/x'",
+            'git commit -m "x > y"',
+        ):
+            self.blocked(command)
 
     def test_a_redirection_without_a_target_is_blocked(self):
         for command in ("echo x >", "echo x >>", "echo x > ; ls", "echo x > > f", "echo x >&", "cat <>", "echo x &>"):
@@ -544,8 +549,9 @@ class WriteTargets(Cases):
             "rm -rf < in.txt /home/ubuntu/somedir",
         ):
             self.blocked(command)
-        for command in ("rm -rf '<' somedir", "echo '>' notes.txt", "echo \\> notes.txt", "cat < in.txt", "echo '<<<' > out.txt"):
-            self.allowed(command)
+        for command in ("rm -rf '<' somedir", "echo '>' notes.txt", "echo \\> notes.txt", "echo '<<<' > out.txt"):
+            self.blocked(command)  # Round 2: a quoted or escaped < or > is refused, these were allowed.
+        self.allowed("cat < in.txt")
 
     def test_a_number_is_a_file_descriptor_only_when_glued_to_the_operator(self):
         for command in (
@@ -564,11 +570,12 @@ class WriteTargets(Cases):
             "exec 5> out.txt",
             "echo hi 2>&1 >/dev/null",
             "(echo hi 2>/dev/null)",
-            "echo a;2>err.txt echo b",
+            "echo a; 2>err.txt echo b",
             "timeout 5 >/dev/null cp x out.txt",
             "cat 0< in.txt",
         ):
             self.quiet(command)
+        self.blocked("echo a;2>err.txt echo b")  # Round 2: a number glued to a separator is refused, was allowed.
 
     def test_pushd_without_a_plain_directory_leaves_the_directory_unknown(self):
         for command in (
@@ -762,6 +769,112 @@ class RedirectHookProcess(unittest.TestCase):
 
         quiet = self.run_hook("echo x > notes.txt 2>&1")
         self.assertEqual((quiet.returncode, quiet.stdout), (0, ""))
+
+
+class FailClosed(Cases):
+    """T-013a round 2: a raw-text check blocks what the guard cannot classify, before any parsing."""
+
+    MESSAGE = "the guard cannot classify this command; write it plainly"
+
+    def check(self, command):
+        return g.evaluate(command, context())
+
+    def test_a_quoted_or_escaped_operator_blocks_the_whole_command(self):
+        for command in (
+            "rm -rf '<' /home/ubuntu/somedir",
+            "cp x '<<<' .claude/",
+            "echo '>'",
+            "tee '|' .claude/settings.json",
+            "rm -rf ';' /home/ubuntu/projects/other",
+            "echo a\\;b",
+            'echo "a|b"',
+            "echo '<<EOF'\ncp x .claude/settings.json\nEOF",
+            "grep 'x|y' f",
+            "sed 's/a;b/c/' f",
+            "awk '$1>2' f",
+            'git commit -m "fix (x)"',
+            "bash -c 'a && b'",
+            'echo "a & b"',
+            "echo \\< x",
+            "echo \\( x",
+        ):
+            self.assertEqual(self.check(command), self.MESSAGE, command)
+
+    def test_a_number_or_ampersand_glued_before_a_redirect_blocks(self):
+        for command in (
+            "true&&2>/dev/null sudo -n true",
+            "true&&2>/dev/null rm -rf /home/ubuntu/projects/other",
+            "true&2>/dev/null cp x .claude/settings.json",
+            "true;2>/dev/null sudo -n true",
+            "true|2>/dev/null sudo -n true",
+            "echo a;2>err.txt echo b",
+            "(2>f echo b)",
+            "true&&>f echo b",
+        ):
+            self.assertEqual(self.check(command), self.MESSAGE, command)
+
+    def test_ansi_c_and_locale_quoting_blocks(self):
+        for command in ("echo $'\\'' > .claude/settings.json #'", 'echo $"x"', "echo $'a'", "echo \"$'\""):
+            self.assertEqual(self.check(command), self.MESSAGE, command)
+
+    def test_a_backslash_newline_blocks(self):
+        for command in ("echo x > .cl\\\naude/settings.json", "su\\\ndo true", 'echo "a\\\nb"'):
+            self.assertEqual(self.check(command), self.MESSAGE, command)
+
+    def test_a_comment_blocks(self):
+        for command in (
+            "echo hi #'\necho x > .claude/settings.json\n#'",
+            "echo hi # note",
+            "# note\necho hi",
+            "echo hi;# note",
+            "echo hi&&#x",
+            "echo hi >#x",
+            "bash -c 'echo hi # x'",
+        ):
+            self.assertEqual(self.check(command), self.MESSAGE, command)
+
+    def test_find_exec_may_end_with_an_escaped_semicolon_only_as_its_last_word(self):
+        self.assertEqual(self.check("find . -exec rm {} \\; -print"), self.MESSAGE)
+        self.assertEqual(self.check("find . -exec rm {} \\; -exec rm {} \\;"), self.MESSAGE)
+        self.assertEqual(self.check("echo x \\;"), self.MESSAGE)
+        self.assertEqual(self.check("find . -name x \\;"), self.MESSAGE)
+        self.assertEqual(self.check("find . -exec a\\;b {}"), self.MESSAGE)
+
+    def test_plain_commands_still_pass_without_asking(self):
+        for command in (
+            "find . -name x -exec cp {} out/ \\;",
+            "find . -name '*.py' -exec grep -l x {} +",
+            "find . -name x -exec cp {} out/ \\; && echo done",
+            "cmd 2>&1 | tail",
+            "dotnet test 2> err.txt",
+            "dotnet test > out.txt",
+            "ls > /dev/null 2>&1",
+            'git commit -m "fix #12"',
+            "echo a#b",
+            "git log --format='%h %s'",
+            "cat <<EOF > /tmp/x\nit's \"quoted\"; a | b > c # d\nEOF",
+            "cat <<'EOF' > /tmp/x\nit's \"quoted\"; a | b > c # d\nEOF",
+            "echo hi &> /dev/null",
+            "echo hi >&2",
+            "echo ${#PATH} $#",
+        ):
+            self.allowed(command)
+            self.assertIsNone(g.evaluate_ask(command, context()), f"should not ask: {command!r}")
+
+    def test_a_heredoc_body_is_text_but_the_lines_after_it_are_commands(self):
+        self.allowed("cat <<EOF > /tmp/x\nhi; there 'x\nEOF\necho done")
+        self.assertEqual(self.check("cat <<EOF > /tmp/x\nbody\nEOF\necho hi # x"), self.MESSAGE)
+        self.assertEqual(self.check("cat <<EOF > /tmp/x\nbody\nEOF\necho 'a|b'"), self.MESSAGE)
+        self.blocked("cat <<EOF > /tmp/x\nbody\nEOF\ncp x .claude/settings.json")
+
+    def test_a_heredoc_that_feeds_a_shell_is_checked_as_a_script(self):
+        self.blocked("bash <<EOF\ncp x .claude/settings.json\nEOF")
+        self.blocked("sh <<'EOF'\nsudo id\nEOF")
+        self.assertEqual(self.check("bash <<EOF\necho 'a|b'\nEOF"), self.MESSAGE)
+
+    def test_the_commit_message_heredoc_form_is_blocked_use_a_file_instead(self):
+        self.assertEqual(self.check('git commit -m "$(cat <<\'EOF\'\nAdd the thing\nEOF\n)"'), self.MESSAGE)
+        self.allowed("git commit -F msg.txt")
 
 
 if __name__ == "__main__":

@@ -19,8 +19,15 @@ A JSON "ask" decision on stdout (exit 0) makes the permission prompt appear for 
 It looks inside bash -c, env, timeout, xargs, find -exec, heredocs and command substitutions (including ones
 inside double quotes), tracks cd and pushd, and blocks anything it cannot parse.
 
+It fails closed: before any parsing, cannot_classify refuses the whole command ("the guard cannot classify this
+command; write it plainly") when it holds a quoted or escaped ; & | ( ) < > (except a backslash-semicolon ending a find -exec), a number
+or & glued before a redirection anywhere but the start of a word (`true&&2>f`), $' or $", a backslash-newline, or a #
+that starts a word. Heredoc bodies are text and are skipped, except a body that feeds a shell (`bash <<EOF`), which is
+checked as a script. The same check runs on every substitution, bash -c script and heredoc script. Plain quoted words
+are fine; a quoted separator is not, so `echo "a|b"` and `git commit -m "fix (x)"` are refused: write it plainly.
+
 Write targets (rule 3) come from the arguments of the writer commands and from redirections (> >> >| &> &>> <> >&file,
-a number glued to the operator is a file descriptor; a quoted or escaped < or > is just a word). When cp, mv, install,
+a number glued to the operator is a file descriptor). When cp, mv, install,
 ln or rsync copy into a directory, directory/source-name is checked too. A target the guard cannot work out (a variable,
 backtick, brace list, bracket class, ~+ or ~-, a relative path after a cd it cannot follow, more than 500 wildcard
 matches) is blocked: write the literal path. * and ? are expanded on disk, wherever the path starts, and every match is
@@ -110,19 +117,18 @@ class FileDescriptor(str):
     """A number written directly against a redirection operator (`2>`, `5>f`), as opposed to a separate word."""
 
 
-QUOTED_MARKS = {"<": "", ">": ""}
+# Quoted or escaped < and > need no mark: cannot_classify refuses them first. {"<": "", ">": ""}
 DIGIT_MARKS = {str(d): chr(0xE010 + d) for d in range(10)}
 FD_MARKS = set(DIGIT_MARKS.values())
-MARKS_BACK = {mark: char for char, mark in {**QUOTED_MARKS, **DIGIT_MARKS}.items()}
+MARKS_BACK = {mark: char for char, mark in DIGIT_MARKS.items()}
 DIGIT_START = " \t\r\n;|()"  # What may stand before a number for it to be a file descriptor (it must start a word).
 
 
 def mark_quoting(command: str) -> str:
-    """Replaces what shlex cannot tell apart with private characters: a `<` or `>` inside quotes or after a backslash,
-    and the digits of a file descriptor glued to an operator. This follows shlex's posix rules exactly: single quotes
-    are literal, a double quote ends only at an unescaped `"`, a backslash outside single quotes takes the next
-    character. A wrongly marked character would only turn an operator into a word that is checked (it is never
-    dropped), so a mistake here makes the guard stricter, not looser."""
+    """Replaces the digits of a file descriptor glued to a redirection operator (`2>`, `5>f`) with private characters,
+    so it can be told from a word that merely ends in digits. cannot_classify has already refused every quoted or
+    escaped operator, so quote state is only followed here to leave digits inside quotes alone (shlex's posix rules:
+    single quotes are literal, a double quote ends only at an unescaped `"`, a backslash takes the next character)."""
     if any("" <= char <= "" for char in command):
         raise Unparseable("private-use characters in the command")
     out: list[str] = []
@@ -130,20 +136,20 @@ def mark_quoting(command: str) -> str:
     while index < length:
         char = command[index]
         if quote == "'":
-            out.append(QUOTED_MARKS.get(char, char))
+            out.append(char)
             quote = "" if char == "'" else quote
         elif quote == '"':
             if char == "\\" and index + 1 < length:  # An escaped character never closes the quote.
                 out.append(char)
                 index += 1
-                out.append(QUOTED_MARKS.get(command[index], command[index]))
+                out.append(command[index])
             else:
-                out.append(QUOTED_MARKS.get(char, char))
+                out.append(char)
                 quote = "" if char == '"' else quote
         elif char == "\\" and index + 1 < length:
             out.append(char)
             index += 1
-            out.append(QUOTED_MARKS.get(command[index], command[index]))
+            out.append(command[index])
         elif char in "'\"":
             quote = char
             out.append(char)
@@ -163,6 +169,131 @@ def mark_quoting(command: str) -> str:
 
 def restore_marks(text: str) -> str:
     return "".join(MARKS_BACK.get(char, char) for char in text)
+
+
+CANNOT_CLASSIFY = "the guard cannot classify this command; write it plainly"
+QUOTE_UNSAFE = set(";&|()<>")  # Inside quotes or after a backslash these are where shlex and bash would part ways.
+FIND_EXEC_WORDS = {"-exec", "-execdir", "-ok", "-okdir"}
+HEREDOC_AT = re.compile(r"<<(?!<)-?\s*(['\"]?)([A-Za-z_]\w*)\1")
+LAST_WORD_END = re.compile(r"[ \t]*(?:\Z|\n|[;&|)])")
+
+
+def cannot_classify(text: str) -> str | None:
+    """A check on the raw text, before any parsing: the reason to block, or None. It follows only quote and escape
+    state, and refuses what the later steps cannot read the way bash does:
+
+      1. a quoted or escaped ; & | ( ) < > (only `\\;` as the last word of a find -exec/-execdir/-ok/-okdir is
+         allowed: the shell passes it to find as the end of the command);
+      2. a number or & glued before a redirection operator anywhere but at the start of a word (`true&&2>f`);
+      3. $' and $" (ANSI-C and locale quoting) outside single quotes;
+      4. a backslash followed by a newline outside single quotes (bash joins the lines, shlex does not);
+      5. a # that starts a word outside quotes (a comment to bash, an ordinary word to shlex).
+
+    The body of a heredoc (after a real, unquoted <<WORD, up to its closing line) is text and is skipped; a heredoc that
+    feeds a shell is checked on its own as a script (see split_heredocs). A stricter result than bash is fine, a looser
+    one is not: when unsure this says no."""
+    index, length = 0, len(text)
+    quote = ""
+    command_start = 0  # Where the current simple command began (only used to recognise a find -exec).
+    word_start = True
+    pending: list[tuple[bool, str]] = []  # Heredocs opened on the current line: (tabs stripped, delimiter).
+    while index < length:
+        char = text[index]
+        after = text[index + 1] if index + 1 < length else ""
+        if quote:
+            if char == quote:
+                quote = ""
+            elif char in QUOTE_UNSAFE or (char == "$" and after == "'" and quote == '"'):
+                return CANNOT_CLASSIFY
+            elif char == "\\" and quote == '"':
+                if after == "\n" or after in QUOTE_UNSAFE:
+                    return CANNOT_CLASSIFY
+                index += 1  # The escaped character never closes the quote.
+            index += 1
+            continue
+
+        if char == "\\":
+            if after == "\n" or (after in QUOTE_UNSAFE and not ends_find_exec(text, command_start, index, word_start)):
+                return CANNOT_CLASSIFY
+            word_start = False
+            index += 2
+        elif char in "'\"":
+            quote, word_start = char, False
+            index += 1
+        elif char == "$" and after in {"'", '"'}:
+            return CANNOT_CLASSIFY
+        elif char == "#" and word_start:
+            return CANNOT_CLASSIFY
+        elif char in "<>":
+            if glued_before_redirect(text, index):
+                return CANNOT_CLASSIFY
+            match = HEREDOC_AT.match(text, index) if char == "<" and text[index - 1 : index] != "<" else None
+            if match:
+                pending.append((match.group(0).startswith("<<-"), match.group(2)))
+                word_start = False
+                index = match.end()
+            else:
+                word_start = True
+                index += 1
+        elif char == "\n":
+            resume = heredoc_bodies_end(text, index, pending)
+            pending = []
+            command_start, word_start = resume + 1, True
+            index = resume + 1
+        elif char in ";|()" or (char == "&" and after != ">" and text[index - 1 : index] not in {"<", ">"}):
+            command_start, word_start = index + 1, True  # A separator; the & of &>, >& and <& is part of a redirection.
+            index += 1
+        elif char in " \t&":
+            word_start = True
+            index += 1
+        else:
+            word_start = False
+            index += 1
+    return None
+
+
+def glued_before_redirect(text: str, index: int) -> bool:
+    """True when the < or > at index has an & or a number in front of it that is not the plain form: `&>`, `2>` and
+    `5>f` are fine at the start of a word (after a space, a newline or the start of the text), `&&2>`, `;2>`, `|2>`,
+    `&2>` and `&&>` are not. A number that ends a longer word (`x5>f`) is part of that word."""
+    if text[index - 1 : index] == "&":
+        return index > 1 and text[index - 2] not in " \t\n"
+    start = index
+    while start > 0 and text[start - 1].isdigit():
+        start -= 1
+    return 0 < start < index and text[start - 1] in ";&|()"
+
+
+def ends_find_exec(text: str, command_start: int, index: int, word_start: bool) -> bool:
+    """True for a `\\;` at index that is the last word of a find command with -exec, -execdir, -ok or -okdir."""
+    if not word_start or text[index + 1 : index + 2] != ";":
+        return False
+    words = text[command_start:index].split()
+    return (
+        bool(words)
+        and os.path.basename(words[0]) == "find"
+        and bool(FIND_EXEC_WORDS & set(words))
+        and LAST_WORD_END.match(text, index + 2) is not None
+    )
+
+
+def heredoc_bodies_end(text: str, newline: int, pending: list[tuple[bool, str]]) -> int:
+    """Where the heredoc bodies that start after this newline end: the index of the newline (or the end of the text)
+    after the last closing line. With no body that closes (so no real heredoc) it is the newline itself."""
+    resume, start = newline, newline + 1
+    for dash, tag in pending:
+        position = start
+        while position <= len(text):
+            line_end = text.find("\n", position)
+            end = len(text) if line_end == -1 else line_end
+            line = text[position:end]
+            if (line.lstrip("\t") if dash else line) == tag:
+                resume, start = end, end + 1
+                break
+            if line_end == -1:
+                break  # No closing line: this was not a heredoc.
+            position = line_end + 1
+    return resume
 
 
 def tokenize(command: str) -> list[list[str]]:
@@ -250,10 +381,20 @@ def split_heredocs(command: str) -> tuple[str, list[str]]:
             )
             if end is None:
                 continue  # No closing line, so this was not a heredoc (for example `x << 2` in an expression).
-            if not quote:
-                scripts.extend(substitutions("\n".join(lines[index:end])))
+            body = "\n".join(lines[index:end])
+            if feeds_shell(line[: match.start()]):
+                scripts.append(body)  # The shell runs the body: it is a script like bash -c's.
+            elif not quote:
+                scripts.extend(substitutions(body))
             index = end + 1
     return "\n".join(kept), scripts
+
+
+def feeds_shell(before: str) -> bool:
+    """True when the command in front of a heredoc operator is a shell (`bash <<EOF`, `env sh <<EOF`)."""
+    words = [word for word in re.split(r"[;&|()]", before)[-1].split() if not re.search(r"[<>]", word)]
+    unwrapped = unwrap(words)
+    return bool(unwrapped) and os.path.basename(unwrapped[0]) in SHELLS
 
 
 def substitutions(text: str) -> list[str]:
@@ -361,6 +502,10 @@ def evaluate_full(command: str, ctx: Context) -> Verdict:
     if pattern and pattern.search(command):
         return Verdict(deny="the project's secret locations (Secret locations in .claude/project-profile.md) are off limits to the dev team")
 
+    unclassifiable = cannot_classify(command)  # On the raw text: heredoc bodies are cut out only after this.
+    if unclassifiable:
+        return Verdict(deny=unclassifiable)
+
     state = {"cwd": ctx.cwd, "asks": [], "depth": 0}
     try:
         body, hidden = split_heredocs(command)
@@ -406,6 +551,10 @@ def evaluate_ask(command: str, ctx: Context) -> str | None:
 def check_script(script: str, ctx: Context, state: dict) -> str | None:
     if state["depth"] > MAX_DEPTH:
         return "commands nested too deeply to check"
+
+    unclassifiable = cannot_classify(script)  # Substitutions, heredoc scripts and bash -c scripts come through here.
+    if unclassifiable:
+        return unclassifiable
 
     inner_state = {"cwd": state["cwd"], "asks": state["asks"], "depth": state["depth"] + 1}
     for inner in substitutions(script):
@@ -500,6 +649,10 @@ def check_inline_script(program: str, args: list[str], ctx: Context, state: dict
                 break
         if script is None:
             return None  # A shell running a file or reading stdin: nothing here to inspect.
+
+    unclassifiable = cannot_classify(script)  # Before the heredoc bodies are cut out of it.
+    if unclassifiable:
+        return unclassifiable
 
     try:
         body, hidden = split_heredocs(script)
