@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.7.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.8.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -14,7 +14,7 @@ Status: v0.7.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `/devteam:status` | Summarises `docs/BACKLOG.md`: in progress, blocked, waiting for you, agent-run budget. |
 | 6 agents | manager, planner, builder, tester (sonnet, runs and reads only, never edits files), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
 | Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
-| Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. |
+| Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. Write targets: redirections (`>`, `>>`, `&>` and the rest) are checked like `cp` and `tee`; a target the hook cannot work out (a `$` variable, backtick, `{a,b}` list, `[...]` class, `~+`, `~-`, or a relative path after a `cd` it cannot follow) is blocked with "write the literal path"; wildcards are expanded on disk, wherever the path starts, and every match is checked (more than 500 matches is blocked, so `touch /tmp/*` in a busy `/tmp` is refused); a number is a file descriptor only when glued to the operator (`2>`); the hook fails closed: before any parsing it blocks the whole command ("the guard cannot classify this command; write it plainly") when it has a quoted or escaped `;` `&` `|` `(` `)` `<` `>` (except `\;` ending a `find -exec`), a number or `&` glued before a redirect anywhere but the start of a word (`true&&2>f`), `$'` or `$"`, a backslash-newline, or a `#` that starts a word (a heredoc body is text, unless it feeds a shell such as `bash <<EOF`); `cp`, `mv`, `install`, `ln` and `rsync` into a directory are also checked as `directory/source-name`; `pushd` without a plain directory makes the directory unknown; a symlink as a write target is followed; shell writes into `.git/hooks` and `.git/config` are blocked. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
 
@@ -129,6 +129,10 @@ before handing over, and you should run it before every push: `python3 <plugin>/
   project, edit the models in `agents/*.md` or the run count in `agents/tester.md`.
 - **Real isolation.** For stronger boundaries than a text hook, run the build and tests under Claude Code's sandbox or in a container or VM
   you control; the guard hook is the fallback, not a replacement.
+- **Guard false positives and open items.** The fail-closed rule refuses some harmless commands: `echo "a|b"`, `grep 'x|y' f`, `sed 's/a;b/c/' f`,
+  `awk '$1>2' f`, `git commit -m "fix (x)"`, `bash -c 'a && b'`, any `#` comment, and `git commit -m "$(cat <<'EOF' ... EOF )"` (use `git commit -F <file>`);
+  write the command plainly. Still open, not covered by the hook (follow-up T-013b): copying a directory's contents into a protected directory
+  (`cp -r /tmp/evil/. .git/`, `rsync -a /tmp/evil/ ./`, `cp -rT /tmp/evil .`), a wildcard destination (`cp -r /tmp/hooks .gi?`), and `rsync -rt` (`-t` means times).
 - **Agent names.** The manager's allowed sub-agents are written as `devteam:planner` etc. If your Claude Code version scopes plugin agents differently,
   adjust the `tools` line in `agents/manager.md`.
 
