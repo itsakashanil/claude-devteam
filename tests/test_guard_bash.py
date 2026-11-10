@@ -528,6 +528,79 @@ class WriteTargets(Cases):
         for command in ("rm .git/index.lock", "cat .git/config", "echo x > .git/info/exclude", "git config user.name x"):
             self.allowed(command)
 
+    def test_a_quoted_or_escaped_redirection_symbol_is_a_word_and_hides_nothing(self):
+        for command in (
+            "rm -rf '<' /home/ubuntu/somedir",
+            'rm -rf "<" /home/ubuntu/somedir',
+            "rm -rf \\< /home/ubuntu/somedir",
+            "rm -rf '>' /home/ubuntu/somedir",
+            "rm -rf '<<<' /home/ubuntu/somedir",
+            "rm -rf '>>' /home/ubuntu/somedir",
+            "cp x '<<<' .claude/",
+            "cp x '>' .claude/settings.json",
+            "cp x \\> .claude/settings.json",
+            "cp x '<' .claude/settings.json",
+            "cp x < in.txt .claude/settings.json",
+            "rm -rf < in.txt /home/ubuntu/somedir",
+        ):
+            self.blocked(command)
+        for command in ("rm -rf '<' somedir", "echo '>' notes.txt", "echo \\> notes.txt", "cat < in.txt", "echo '<<<' > out.txt"):
+            self.allowed(command)
+
+    def test_a_number_is_a_file_descriptor_only_when_glued_to_the_operator(self):
+        for command in (
+            "timeout 5 >/dev/null cp x .claude/settings.json",
+            "timeout 5 > /dev/null cp x .claude/settings.json",
+            "nice -n 5 >/dev/null sudo true",
+            "flock 9 >/dev/null rm -rf /home/ubuntu/x",
+            "timeout 5 2>/dev/null rm -rf /home/ubuntu/x",
+            "echo x 5>.claude/x",
+            "echo x 12> .claude/x",
+        ):
+            self.blocked(command)
+        for command in (
+            "cmd 2>&1",
+            "dotnet test 2> err.txt",
+            "exec 5> out.txt",
+            "echo hi 2>&1 >/dev/null",
+            "(echo hi 2>/dev/null)",
+            "echo a;2>err.txt echo b",
+            "timeout 5 >/dev/null cp x out.txt",
+            "cat 0< in.txt",
+        ):
+            self.quiet(command)
+
+    def test_pushd_without_a_plain_directory_leaves_the_directory_unknown(self):
+        for command in (
+            "pushd -n /tmp && echo x > .claude/settings.json",
+            "pushd /tmp && pushd && echo x > .claude/settings.json",
+            "pushd && echo x > f",
+            "pushd +1 && echo x > f",
+            "pushd -1 && echo x > f",
+            "pushd -- /tmp && echo x > f",
+        ):
+            self.blocked(command)
+        for command in ("pushd /tmp && echo x > /tmp/y", "pushd /tmp && echo x > y"):
+            self.allowed(command)
+
+    def test_a_directory_destination_is_combined_with_each_source_name(self):
+        for command in (
+            "cp -r /somewhere/hooks .git/",
+            "cp -r /somewhere/.claude ./",
+            "cp -r /somewhere/.claude .",
+            "cp -r /somewhere/.claude/ ./",
+            "mv /somewhere/hooks .git/",
+            "ln -s /somewhere/hooks .git/",
+            "install /somewhere/hooks .git/",
+            "rsync -a /somewhere/hooks .git/",
+            "cp -t .git/ /somewhere/hooks",
+            "cp --target-directory=.git /somewhere/hooks",
+            "cp -r /somewhere/.claude src/..",
+        ):
+            self.blocked(command)
+        for command in ("cp a.txt out/", "cp -r src out/", "cp a.txt b.txt c.txt out/", "cp -t out/ a.txt", "mv a.txt out/"):
+            self.quiet(command)
+
 
 class WriteTargetsOnDisk(unittest.TestCase):
     """Glob and ask-formatting tests that need a real directory."""
@@ -590,7 +663,7 @@ class WriteTargetsOnDisk(unittest.TestCase):
         self.assertIsNotNone(ask)
         self.assertEqual(ask.count("'CLAUDE.md'"), 1)
         self.assertLess(ask.index("'CLAUDE.md'"), ask.index("'deploy/x'"))
-        self.assertLess(ask.index("'deploy/x'"), ask.index("push"))
+        self.assertLess(ask.index("push"), ask.index("'CLAUDE.md'"))  # Gate reasons (push, share) come first.
 
         many = self.verdict("touch deploy/a deploy/b deploy/c deploy/d deploy/e deploy/f deploy/g").ask
         self.assertIn("'deploy/e'", many)
@@ -606,6 +679,62 @@ class WriteTargetsOnDisk(unittest.TestCase):
         self.assertIsNotNone(crafted)
         for bad in ("\n", "\x1b", " ", "\r"):
             self.assertNotIn(bad, crafted)
+
+    def test_the_push_is_always_named_even_after_many_other_reasons(self):
+        ask = self.verdict("touch deploy/a deploy/b deploy/c deploy/d deploy/e deploy/f && git push").ask
+
+        self.assertIsNotNone(ask)
+        self.assertIn("git push", ask)
+        self.assertLess(ask.index("git push"), ask.index("'deploy/a'"))
+        self.assertIn("and 2 more", ask)
+
+    def test_a_quote_in_a_shown_name_cannot_end_the_quoting(self):
+        ask = self.verdict("touch \"deploy/a'b\" 'deploy/c\\d'").ask
+
+        self.assertIsNotNone(ask)
+        self.assertIn("'deploy/a\\'b'", ask)
+        self.assertIn("'deploy/c\\\\d'", ask)
+
+    def test_a_directory_destination_that_exists_is_combined_with_the_source_name(self):
+        for command in ("cp -r /somewhere/hooks .git", "mv /somewhere/hooks .git", "cp -r /somewhere/.claude .", "cp /somewhere/hooks ./.git"):
+            self.assertDenied(command)
+        self.assertPasses("cp /somewhere/a.txt src")
+        self.assertPasses("cp a.txt src/")
+        self.assertPasses("cp -r src /tmp")
+
+    def test_a_directory_symlink_destination_is_followed_by_mv_and_ln_too(self):
+        (self.repo / "dirlink").symlink_to(".claude")
+        for command in ("mv /somewhere/x dirlink", "ln -s /somewhere/x dirlink/", "cp /somewhere/x dirlink"):
+            self.assertDenied(command)
+
+    def test_a_wildcard_outside_the_repo_is_expanded_and_links_into_the_rules_are_found(self):
+        outside = Path(os.path.realpath(tempfile.mkdtemp(prefix="guard-outside-")))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "link").symlink_to(self.repo / ".claude" / "settings.json")
+        (outside / "d").symlink_to(self.repo / ".claude")
+        (outside / "a.log").write_text("x")
+        (outside / "b.log").write_text("x")
+
+        for command in (
+            f"echo x > {outside}/l*",
+            f"echo x > {outside}/?/settings.json",
+            f"echo x > {outside}/?/brand-new",
+            f"touch {outside}/d*/brand-new",
+            f"cp x {outside}/li?k",
+            f"tee {outside}/*",
+        ):
+            self.assertDenied(command)
+        for command in (f"touch {outside}/*.log", f"echo x > {outside}/a.l*", f"cp x {outside}/?.log"):
+            self.assertPasses(command)
+
+    def test_a_wildcard_with_more_than_500_matches_outside_the_repo_is_blocked_too(self):
+        outside = Path(os.path.realpath(tempfile.mkdtemp(prefix="guard-outside-")))
+        self.addCleanup(shutil.rmtree, outside, True)
+        for number in range(501):
+            (outside / f"f{number:03d}").write_text("")
+
+        self.assertDenied(f"touch {outside}/*")
+        self.assertPasses(f"touch {outside}/f00*")
 
 
 class RedirectHookProcess(unittest.TestCase):

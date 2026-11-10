@@ -17,7 +17,16 @@ A JSON "ask" decision on stdout (exit 0) makes the permission prompt appear for 
   5. The project's secret locations (`secret_locations` in the profile) are never mentioned.
 
 It looks inside bash -c, env, timeout, xargs, find -exec, heredocs and command substitutions (including ones
-inside double quotes), tracks cd, and blocks anything it cannot parse.
+inside double quotes), tracks cd and pushd, and blocks anything it cannot parse.
+
+Write targets (rule 3) come from the arguments of the writer commands and from redirections (> >> >| &> &>> <> >&file,
+a number glued to the operator is a file descriptor; a quoted or escaped < or > is just a word). When cp, mv, install,
+ln or rsync copy into a directory, directory/source-name is checked too. A target the guard cannot work out (a variable,
+backtick, brace list, bracket class, ~+ or ~-, a relative path after a cd it cannot follow, more than 500 wildcard
+matches) is blocked: write the literal path. * and ? are expanded on disk, wherever the path starts, and every match is
+checked after following symlinks (not for rm, mv and ln, which act on the name itself). Shell writes into .git/hooks
+and .git/config are blocked like .claude/. The permission prompt lists each different reason once, gate reasons (git
+push) first, at most five, with the paths quoted and stripped of control characters.
 
 With no profile the strictest generic rules still apply: deletes only inside the repo, no force pushes.
 
@@ -43,6 +52,8 @@ MAX_GLOB_MATCHES = 500
 MAX_ASKS_SHOWN = 5
 MAX_SHOWN_LENGTH = 120
 PROFILE = ".claude/project-profile.md"
+PUSH_ASK = "git push shares work outside this machine (gate): the boss must approve this push"
+GATE_ASKS = {PUSH_ASK}  # Asks about sharing something: always listed first.
 
 PUNCTUATION = "();<>|&\n"
 SEPARATOR_CHARS = set(";&|()\n")  # A token made only of these ends a command; < and > are redirections.
@@ -59,7 +70,8 @@ READ_REDIRECTS = {"<", "<<", "<<-", "<<<", "<&"}
 REDIRECTS = WRITE_REDIRECTS | READ_REDIRECTS
 PUNCTUATION_PIECES = re.compile(r"<\(|>\(|&>>|&>|<>|>>|>\||>&|<<<|<<-?|<&|[;&|()\n<>]")
 # Commands that replace or remove the name itself: a symlink target is not followed. Everything else writes through a link.
-NO_FOLLOW = {"rm", "rmdir", "unlink", "mv", "ln"}
+DESTINATION_WRITERS = {"cp", "mv", "install", "ln", "rsync"}
+NO_FOLLOW ={"rm", "rmdir", "unlink", "mv", "ln"}
 HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_]\w*)\1")
 
 
@@ -90,10 +102,74 @@ class Unresolvable(Exception):
 
 # --- reading the command ---------------------------------------------------------------------------
 
+class Operator(str):
+    """A redirection operator that stood outside quotes in the command. A quoted or escaped `<` is a plain word."""
+
+
+class FileDescriptor(str):
+    """A number written directly against a redirection operator (`2>`, `5>f`), as opposed to a separate word."""
+
+
+QUOTED_MARKS = {"<": "", ">": ""}
+DIGIT_MARKS = {str(d): chr(0xE010 + d) for d in range(10)}
+FD_MARKS = set(DIGIT_MARKS.values())
+MARKS_BACK = {mark: char for char, mark in {**QUOTED_MARKS, **DIGIT_MARKS}.items()}
+DIGIT_START = " \t\r\n;|()"  # What may stand before a number for it to be a file descriptor (it must start a word).
+
+
+def mark_quoting(command: str) -> str:
+    """Replaces what shlex cannot tell apart with private characters: a `<` or `>` inside quotes or after a backslash,
+    and the digits of a file descriptor glued to an operator. This follows shlex's posix rules exactly: single quotes
+    are literal, a double quote ends only at an unescaped `"`, a backslash outside single quotes takes the next
+    character. A wrongly marked character would only turn an operator into a word that is checked (it is never
+    dropped), so a mistake here makes the guard stricter, not looser."""
+    if any("" <= char <= "" for char in command):
+        raise Unparseable("private-use characters in the command")
+    out: list[str] = []
+    index, quote, length = 0, "", len(command)
+    while index < length:
+        char = command[index]
+        if quote == "'":
+            out.append(QUOTED_MARKS.get(char, char))
+            quote = "" if char == "'" else quote
+        elif quote == '"':
+            if char == "\\" and index + 1 < length:  # An escaped character never closes the quote.
+                out.append(char)
+                index += 1
+                out.append(QUOTED_MARKS.get(command[index], command[index]))
+            else:
+                out.append(QUOTED_MARKS.get(char, char))
+                quote = "" if char == '"' else quote
+        elif char == "\\" and index + 1 < length:
+            out.append(char)
+            index += 1
+            out.append(QUOTED_MARKS.get(command[index], command[index]))
+        elif char in "'\"":
+            quote = char
+            out.append(char)
+        elif char.isdigit() and (index == 0 or command[index - 1] in DIGIT_START):
+            end = index
+            while end < length and command[end].isdigit():
+                end += 1
+            glued = end < length and command[end] in "<>"
+            out.append("".join(DIGIT_MARKS.get(d, d) for d in command[index:end]) if glued else command[index:end])
+            index = end
+            continue
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def restore_marks(text: str) -> str:
+    return "".join(MARKS_BACK.get(char, char) for char in text)
+
+
 def tokenize(command: str) -> list[list[str]]:
     """Splits into simple commands at ; & | ( ) and newlines that are outside quotes. Quoted text is left exactly as
-    written, so a script passed to `bash -c "..."` keeps its own newlines for the recursive check."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
+    written, so a script passed to `bash -c "..."` keeps its own newlines for the recursive check. Redirection
+    operators outside quotes come out as Operator, numbers glued to one as FileDescriptor, everything else as str."""
+    lexer = shlex.shlex(mark_quoting(command), posix=True, punctuation_chars=PUNCTUATION)
     lexer.whitespace = " \t\r"  # Not the newline: that is a separator.
     lexer.whitespace_split = True
     lexer.commenters = ""
@@ -104,34 +180,46 @@ def tokenize(command: str) -> list[list[str]]:
 
     commands: list[list[str]] = [[]]
     for token in tokens:
-        pieces = PUNCTUATION_PIECES.findall(token) if set(token) <= set(PUNCTUATION) else [token]
-        for piece in pieces:
-            if set(piece) <= SEPARATOR_CHARS:
-                commands.append([])
-            else:
-                commands[-1].append(piece)  # Words, and redirection operators (taken out by split_redirections).
+        if set(token) <= set(PUNCTUATION):
+            for piece in PUNCTUATION_PIECES.findall(token):
+                if set(piece) <= SEPARATOR_CHARS:
+                    commands.append([])
+                elif piece in REDIRECTS:
+                    commands[-1].append(Operator(piece))  # Taken out again by split_redirections.
+                else:
+                    commands[-1].append(piece)
+        elif token and all(char in FD_MARKS for char in token):
+            commands[-1].append(FileDescriptor(restore_marks(token)))
+        else:
+            commands[-1].append(restore_marks(token))
     return [c for c in commands if c]
 
 
 def split_redirections(tokens: list[str]) -> tuple[list[str], list[str], str | None]:
     """Takes redirections out of one simple command. Returns (the words left, every file written, a problem).
 
-    A write operator with no target is a problem (fail closed). A number just before an operator is a file
-    descriptor and is dropped. Read operators and here-docs are removed with their operand. `>&word` writes a
-    file unless the word is a number or `-`. T-003 can reuse this to find every write target of a command."""
+    A write operator with no target is a problem (fail closed). Only a number glued to an operator in the raw text
+    (`2>`, `5>f`) is a file descriptor and is dropped; a separate word `5` stays a word. Quoted or escaped `<` and `>`
+    are words too. Read operators and here-docs are removed with their operand, which is a file read, never an
+    argument. `>&word` writes a file unless the word is a number or `-`. T-003 can reuse this to find every write
+    target of a command."""
     kept: list[str] = []
     targets: list[str] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if token not in REDIRECTS:
+        if isinstance(token, FileDescriptor):
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            if not isinstance(following, Operator):
+                kept.append(str(token))  # Not in front of an operator after all: an ordinary word.
+            index += 1
+            continue
+        if not isinstance(token, Operator):
             kept.append(token)
             index += 1
             continue
-        if kept and kept[-1].isdigit():
-            kept.pop()
         operand = tokens[index + 1] if index + 1 < len(tokens) else None
-        if operand in REDIRECTS:
+        if isinstance(operand, Operator):
             operand = None
         index += 2 if operand is not None else 1
         if token in WRITE_REDIRECTS:
@@ -287,8 +375,9 @@ def evaluate_full(command: str, ctx: Context) -> Verdict:
 
 
 def join_asks(asks: list[str]) -> str | None:
-    """Every different reason once, in order, at most MAX_ASKS_SHOWN of them, so the boss sees what he approves."""
-    unique = list(dict.fromkeys(asks))
+    """Every different reason once, at most MAX_ASKS_SHOWN of them, so the boss sees what he approves. Gate reasons
+    (a push or share) come first, so they are never in the "and N more" tail; the rest keep the order they came in."""
+    unique = sorted(dict.fromkeys(asks), key=lambda reason: reason not in GATE_ASKS)
     if not unique:
         return None
     shown = "; ".join(unique[:MAX_ASKS_SHOWN])
@@ -301,7 +390,7 @@ def quoted(text: str) -> str:
     clean = "".join(char for char in text if char.isprintable())
     if len(clean) > MAX_SHOWN_LENGTH:
         clean = clean[:MAX_SHOWN_LENGTH] + "..."
-    return f"'{clean}'"
+    return "'" + clean.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def evaluate(command: str, ctx: Context) -> str | None:
@@ -351,8 +440,14 @@ def check_one(tokens: list[str], ctx: Context, state: dict) -> str | None:
     if program == "sudo" or program in PRIVILEGE_TOOLS:
         return check_sudo(tokens, ctx)
 
-    if program in {"cd", "pushd"}:
+    if program == "cd":
         state["cwd"] = next_directory(args, state["cwd"])
+        return None
+
+    if program == "pushd":
+        # Without a directory it swaps the top two; with an option (-n) or +N/-N it may not move at all: unknown.
+        plain = bool(args) and not any(a.startswith(("-", "+")) for a in args)
+        state["cwd"] = next_directory(args, state["cwd"]) if plain else None
         return None
 
     if program == "popd":
@@ -554,7 +649,70 @@ def check_writes(program: str, args: list[str], ctx: Context, state: dict) -> st
         reason = control_check(target, ctx, state, follow=follow)
         if reason:
             return reason
+    for target in directory_destinations(program, args, state["cwd"]):
+        reason = control_check(target, ctx, state, follow=follow)
+        if reason:
+            return reason
     return None
+
+
+def directory_destinations(program: str, args: list[str], cwd: str | None) -> list[str]:
+    """When cp, mv, install, ln or rsync copy into a directory, the real write targets are directory/name for each
+    source: `cp -r /x/hooks .git/` writes .git/hooks. The directory is the one given with -t, or the last word when it
+    ends in /, is . or .., or exists as a directory (a link to one counts). A source that is the find marker {} has an
+    unknown name, so the names that matter (.claude, hooks, config) are checked instead."""
+    if program not in DESTINATION_WRITERS:
+        return []
+
+    sources: list[str] = []
+    given: str | None = None
+    options_done, take_next = False, False
+    for arg in args:
+        attached = re.fullmatch(r"-[A-Za-z]*t(.+)", arg)
+        if take_next:
+            given, take_next = arg, False
+        elif not options_done and arg == "--":
+            options_done = True
+        elif not options_done and arg.startswith("--target-directory="):
+            given = arg.split("=", 1)[1]
+        elif not options_done and (arg == "--target-directory" or re.fullmatch(r"-[A-Za-z]*t", arg)):
+            take_next = True
+        elif not options_done and attached:
+            given = attached.group(1)
+        elif not options_done and arg.startswith("-"):
+            continue
+        else:
+            sources.append(arg)
+
+    destination = given
+    if destination is None:
+        if len(sources) < 2:
+            return []
+        destination = sources.pop()
+        if not is_directory(destination, cwd):
+            return []
+
+    base = destination.rstrip("/")
+    found: list[str] = []
+    for source in sources:
+        name = os.path.basename(source.rstrip("/"))
+        if source == "{}":
+            found += [f"{base}/{unknown}" for unknown in (".claude", "hooks", "config")]
+        elif name and name not in {".", ".."}:
+            found.append(f"{base}/{name}")
+    return found
+
+
+def is_directory(path: str, cwd: str | None) -> bool:
+    """True for a path that ends in /, is . or .., or exists as a directory (a link to one counts). A path the guard
+    cannot resolve is not (it is already refused as a write target of its own)."""
+    if path.endswith("/") or os.path.basename(path) in {".", ".."}:
+        return True
+    try:
+        absolute = absolute_target(path, cwd)
+    except Unresolvable:
+        return False
+    return not (GLOB_CHARS & set(absolute)) and os.path.isdir(absolute)
 
 
 def write_targets(program: str, args: list[str]) -> list[str]:
@@ -631,15 +789,14 @@ def repo_relatives(path: str, ctx: Context, cwd: str | None, follow: bool = True
 
     candidates = [absolute]
     if cut is not None:
-        prefix = "/".join(parts[:cut]) or "/"
-        candidates = [prefix]
-        real_prefix = os.path.realpath(prefix)
-        can_reach_repo = real_prefix == "/" or repo == real_prefix or repo.startswith(real_prefix + "/") or real_prefix.startswith(repo + "/")
-        if can_reach_repo:  # A wildcard somewhere that cannot lead into the repo needs no expansion.
-            found = list(itertools.islice(glob.iglob(absolute, include_hidden=True), MAX_GLOB_MATCHES + 1))
-            if len(found) > MAX_GLOB_MATCHES:
-                raise Unresolvable()
-            candidates += found
+        # Expand up to the last wildcard name (a link found there may lead into the repo, wherever the path starts),
+        # then put the plain rest of the path back on each match, so a new file below a matched link is checked too.
+        last = max(i for i, part in enumerate(parts) if GLOB_CHARS & set(part))
+        tail = "/".join(parts[last + 1:])
+        found = list(itertools.islice(glob.iglob("/".join(parts[: last + 1]), include_hidden=True), MAX_GLOB_MATCHES + 1))
+        if len(found) > MAX_GLOB_MATCHES:
+            raise Unresolvable()
+        candidates = ["/".join(parts[:cut]) or "/"] + [f"{match}/{tail}" if tail else match for match in found]
 
     places: list[str] = []
     for candidate in candidates:
@@ -707,7 +864,7 @@ def check_git(args: list[str], ctx: Context, state: dict) -> str | None:
     reason = push_scan(ctx)
     if reason:
         return reason
-    state["asks"].append("git push shares work outside this machine (gate): the boss must approve this push")
+    state["asks"].append(PUSH_ASK)
     return None
 
 
