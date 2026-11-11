@@ -4,7 +4,9 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.9.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.10.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+
+Every agent carries the same `## Commands and edits` section (one command per Bash call with absolute paths, `-F` for commits and merges, the Edit and Write tools for files, a blocked step means stop and report), so a brief does not have to repeat these rules.
 
 ## What you get
 | Piece | What it does |
