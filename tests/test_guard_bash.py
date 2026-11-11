@@ -877,5 +877,28 @@ class FailClosed(Cases):
         self.allowed("git commit -F msg.txt")
 
 
+class GateCodeScriptTests(Cases):
+    """T-011b: the fixed gate-code script runs without a block or a question; the old inline command stays blocked."""
+
+    MESSAGE = "the guard cannot classify this command; write it plainly"
+    OLD_INLINE = "python3 -I -c \"import secrets; print(''.join(secrets.choice('23456789ABCDEFGHJKMNPQRSTUVWXYZ') for _ in range(6)))\""
+
+    def test_the_script_by_relative_or_absolute_path_is_neither_blocked_nor_asked(self):
+        for command in (".claude/scripts/gate-code", f"{REPO}/.claude/scripts/gate-code"):
+            for agent in (None, "manager", "builder"):
+                self.assertIsNone(g.evaluate(command, context(agent_type=agent)), command)
+                self.assertIsNone(g.evaluate_ask(command, context(agent_type=agent)), command)
+
+    def test_chained_after_the_script_the_second_command_is_still_checked(self):
+        self.blocked(".claude/scripts/gate-code; rm -rf /")
+        self.blocked(".claude/scripts/gate-code && rm -rf /tmp/x")
+        self.blocked(".claude/scripts/gate-code && sudo id")
+        self.blocked(".claude/scripts/gate-code && cp x .claude/settings.json")
+
+    def test_the_old_inline_command_is_still_refused_as_unclassifiable(self):
+        self.assertEqual(g.evaluate(self.OLD_INLINE, context()), self.MESSAGE)
+        self.assertEqual(g.evaluate(self.OLD_INLINE, context(agent_type="manager")), self.MESSAGE)
+
+
 if __name__ == "__main__":
     unittest.main()
