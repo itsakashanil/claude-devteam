@@ -14,6 +14,25 @@ REQUIREMENTS = ROOT / ".github" / "ci-requirements.txt"
 
 SKIP_DIRS = {".git", ".team-work", "node_modules", "bin", "obj", "__pycache__"}
 
+RUFF_FILE = "tests/test_ci_workflow.py"
+
+APPROVED_PINS = {
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    "actions/setup-python": "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0",
+    "actions/setup-dotnet": "a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0",
+}
+
+TIMEOUT_RE = r"(?m)^    timeout-minutes:\s*\d+\s*$"
+RUNNER_RE = r"(?m)^    runs-on:\s*ubuntu-24\.04\s*$"
+CREDENTIALS_RE = r"(?m)^\s+persist-credentials:\s*false\s*$"
+PUSH_INLINE = r"push:\s*\n\s+branches:\s*\[\s*main\s*\]"
+PUSH_LISTED = r"push:\s*\n\s+branches:\s*\n\s+-\s+main\s*(\n|$)"
+FOLDER_BEFORE = r"(^|[\s'\"])\.?/?"
+FOLDER_AFTER = r"/?([\s'\"]|$)"
+NAME_VERSION = r"^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.]*"
+HASH_PART = r"\s+--hash=sha256:[0-9a-f]{64}\s*$"
+REQUIREMENT_LINE = NAME_VERSION + HASH_PART
+
 
 def read_workflow() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
@@ -43,8 +62,11 @@ def run_blocks(text: str) -> list[str]:
         if value.strip() in ("|", ">", "|-", ">-", "|+", ">+"):
             body = []
             j = i + 1
-            while j < len(lines) and (not lines[j].strip() or indent_of(lines[j]) > key_indent):
-                body.append(lines[j])
+            while j < len(lines):
+                line = lines[j]
+                if line.strip() and indent_of(line) <= key_indent:
+                    break
+                body.append(line)
                 j += 1
             i = j
         else:
@@ -102,23 +124,25 @@ class WorkflowFileTests(unittest.TestCase):
     def test_workflow_exists(self) -> None:
         self.assertTrue(WORKFLOW.is_file(), f"missing {WORKFLOW}")
 
-    def test_every_uses_is_pinned_to_a_full_sha_with_tag_comment(self) -> None:
+    def test_every_uses_matches_an_approved_pin(self) -> None:
         found = uses_lines(read_workflow())
         self.assertTrue(found, "no uses: lines found")
-        pattern = re.compile(
-            r"^\s*(-\s+)?uses:\s+[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}\s+#\s*v\d+(\.\d+)+\s*$"
-        )
+        bad: list[str] = []
         for ln in found:
-            self.assertRegex(ln, pattern, f"bad pin: {ln.strip()}")
+            rest = ln.split("uses:", 1)[1].strip()
+            action, _, tail = rest.partition("@")
+            if APPROVED_PINS.get(action) != tail:
+                bad.append(ln.strip())
+        self.assertEqual(bad, [], "uses: lines not on an approved pin")
 
     def test_permissions_top_level_contents_read_only(self) -> None:
         lines = read_workflow().splitlines()
         idx = [i for i, ln in enumerate(lines) if re.match(r"^permissions:", ln)]
         self.assertEqual(len(idx), 1, "need exactly one top-level permissions:")
-        i = idx[0]
-        self.assertRegex(lines[i], r"^permissions:\s*$")
+        first = idx[0]
+        self.assertRegex(lines[first], r"^permissions:\s*$")
         body = []
-        for ln in lines[i + 1 :]:
+        for ln in lines[first + 1 :]:
             if ln.strip() and indent_of(ln) == 0:
                 break
             if ln.strip():
@@ -127,28 +151,38 @@ class WorkflowFileTests(unittest.TestCase):
 
     def test_no_per_job_permissions(self) -> None:
         for name, body in job_sections(read_workflow()).items():
-            self.assertNotRegex(body, r"(?m)^\s+permissions:", f"job {name} sets permissions")
+            self.assertNotRegex(
+                body,
+                r"(?m)^\s+permissions:",
+                f"job {name} sets permissions",
+            )
 
     def test_triggers_are_pull_request_and_push_to_main_only(self) -> None:
         text = read_workflow()
         self.assertNotIn("pull_request_target", text)
         self.assertNotIn("workflow_run", text)
         lines = text.splitlines()
-        i = next(i for i, ln in enumerate(lines) if re.match(r"^(on|\"on\"|'on'):\s*$", ln))
+        on_line = r"^(on|\"on\"|'on'):\s*$"
+        first = next(i for i, ln in enumerate(lines) if re.match(on_line, ln))
         block = []
-        for ln in lines[i + 1 :]:
+        for ln in lines[first + 1 :]:
             if ln.strip() and indent_of(ln) == 0:
                 break
             block.append(ln)
-        keys = [m.group(1) for ln in block if (m := re.match(r"^  ([A-Za-z_]+):", ln))]
+        keys = []
+        for ln in block:
+            m = re.match(r"^  ([A-Za-z_]+):", ln)
+            if m:
+                keys.append(m.group(1))
         self.assertEqual(sorted(keys), ["pull_request", "push"])
         joined = "\n".join(block)
-        inline = r"push:\s*\n\s+branches:\s*\[\s*main\s*\]"
-        listed = r"push:\s*\n\s+branches:\s*\n\s+-\s+main\s*(\n|$)"
-        self.assertRegex(joined, f"(?s){inline}|{listed}")
+        self.assertRegex(joined, f"(?s){PUSH_INLINE}|{PUSH_LISTED}")
 
     def test_no_secrets_reference(self) -> None:
         self.assertNotIn("secrets.", read_workflow())
+
+    def test_no_cache_anywhere(self) -> None:
+        self.assertNotIn("cache:", read_workflow())
 
     def test_no_event_fields_inside_run(self) -> None:
         for block in run_blocks(read_workflow()):
@@ -160,47 +194,66 @@ class WorkflowFileTests(unittest.TestCase):
         jobs = job_sections(read_workflow())
         self.assertTrue(jobs, "no jobs found")
         for name, body in jobs.items():
-            self.assertRegex(body, r"(?m)^    timeout-minutes:\s*\d+\s*$", f"{name}: timeout")
-            self.assertRegex(body, r"(?m)^    runs-on:\s*ubuntu-24\.04\s*$", f"{name}: runs-on")
+            self.assertRegex(body, TIMEOUT_RE, f"{name}: timeout")
+            self.assertRegex(body, RUNNER_RE, f"{name}: runs-on")
 
     def test_every_checkout_does_not_persist_credentials(self) -> None:
         lines = read_workflow().splitlines()
-        checkouts = [i for i, ln in enumerate(lines) if "uses: actions/checkout@" in ln]
+        checkouts = [i for i, ln in enumerate(lines) if "actions/checkout@" in ln]
         self.assertTrue(checkouts, "no checkout step")
-        for i in checkouts:
-            self.assertRegex(step_text(lines, i), r"(?m)^\s+persist-credentials:\s*false\s*$")
+        for idx in checkouts:
+            self.assertRegex(step_text(lines, idx), CREDENTIALS_RE)
 
     def test_every_test_folder_is_run_by_the_workflow(self) -> None:
         folders = test_folders()
         self.assertTrue(folders, "no test folders found")
-        discover = [ln for ln in read_workflow().splitlines() if "unittest" in ln or "pytest" in ln]
+        discover = []
+        for ln in read_workflow().splitlines():
+            if "unittest" in ln or "pytest" in ln:
+                discover.append(ln)
         text = "\n".join(discover)
         for folder in sorted(folders):
             self.assertRegex(
                 text,
-                r"(^|[\s'\"])\.?/?" + re.escape(folder) + r"/?([\s'\"]|$)",
+                FOLDER_BEFORE + re.escape(folder) + FOLDER_AFTER,
                 f"workflow does not run tests in {folder}",
             )
 
-    def test_the_plugin_workflow_has_no_dotnet_and_runs_the_scan_and_ruff(self) -> None:
+    def test_ruff_steps_name_exactly_the_listed_file(self) -> None:
+        commands = []
+        for block in run_blocks(read_workflow()):
+            if block.strip().startswith("ruff"):
+                commands.append(block.strip())
+        expected = [
+            f"ruff check {RUFF_FILE}",
+            f"ruff format --check {RUFF_FILE}",
+        ]
+        self.assertEqual(commands, expected)
+
+    def test_pip_install_requires_hashes(self) -> None:
+        installs = []
+        for block in run_blocks(read_workflow()):
+            if "pip install" in block:
+                installs.append(block)
+        self.assertEqual(len(installs), 1, "need exactly one pip install")
+        self.assertIn("--require-hashes", installs[0])
+
+    def test_the_plugin_workflow_has_no_dotnet_and_runs_the_scan(self) -> None:
         text = read_workflow()
         self.assertNotIn("dotnet", text)
         self.assertIn("python3 scripts/secret_scan.py", text)
-        self.assertIn("ruff check", text)
-        self.assertIn("ruff format --check", text)
 
 
 class RequirementsTests(unittest.TestCase):
     def test_requirement_lines_carry_hashes(self) -> None:
         self.assertTrue(REQUIREMENTS.is_file(), f"missing {REQUIREMENTS}")
-        lines = [
-            ln
-            for ln in REQUIREMENTS.read_text(encoding="utf-8").splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
-        ]
+        lines = []
+        for ln in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
+            if ln.strip() and not ln.strip().startswith("#"):
+                lines.append(ln)
         self.assertTrue(lines)
         for ln in lines:
-            self.assertRegex(ln, r"^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.]*\s+--hash=sha256:[0-9a-f]{64}\s*$")
+            self.assertRegex(ln, REQUIREMENT_LINE)
 
 
 if __name__ == "__main__":
