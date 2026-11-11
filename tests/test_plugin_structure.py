@@ -729,7 +729,7 @@ class DenialAndChannelGates(unittest.TestCase):
     def test_readme_describes_gate_2_the_plan_hash_audit_and_dm_policy(self):
         text = flat((ROOT / "README.md").read_text())
         for phrase in ("always asks this question", '"deployed" is its own question',
-                       "git hash-object .team-work/<id>/plan.md", "the hash in the gate 1 question", "dmPolicy", "allowlist"):
+                       "git hash-object <project root>/.team-work/<id>/plan.md", "the hash in the gate 1 question", "dmPolicy", "allowlist"):
             self.assertIn(phrase, text, phrase)
 
     @staticmethod
@@ -833,6 +833,8 @@ class AgentWorkingRules(unittest.TestCase):
             "A block by a hook, a permission rule, the sandbox or the proxy is a denial, even for a read: stop and report it (see below)",
             "unless your brief's `Allowed method:` line covers that step",
             "never switch tools (Read, Grep, git grep) to get the same information",
+            "Otherwise only the manager may order one rerun",
+            "never rerun it in another shape",
         )
         for phrase in rules:
             self.assertIn(phrase, block, phrase)
@@ -855,6 +857,27 @@ class AgentWorkingRules(unittest.TestCase):
         self.assertEqual(relative_paths_in_commands("Run `git show <h>:docs/a.md` and `${CLAUDE_PLUGIN_ROOT}/scripts/x.py /abs/docs`."), [])
         for name, text in AGENTS.items():
             self.assertEqual(relative_paths_in_commands(text), [], name)
+
+    def test_p7_the_version_string_and_notify_examples_hold_no_characters_the_guard_blocks(self):
+        forbidden = re.compile(r"[()<>|]")
+        placeholder = re.compile(r"<[a-z][a-z ]*>")
+        match = re.search(r"version\s+string\s+`([^`]*)`", AGENTS["deployer"])
+        self.assertIsNotNone(match, "the deployer names no version string format")
+        fmt = match.group(1)
+        self.assertEqual(fmt, "<git short hash> <checksum prefix>")
+        self.assertIsNone(forbidden.search(placeholder.sub("", fmt)), fmt)
+        self.assertNotIn("subject", fmt)
+        self.assertNotIn("subject", flat(AGENTS["deployer"]).split("## Mode VERIFY")[0].split("version string", 1)[1].split("4.", 1)[0])
+        for name, text in AGENTS.items():
+            for example in re.findall(r'notify-owner\s+"([^"]*)"', text):
+                self.assertIsNone(forbidden.search(example), f"{name}: {example}")
+
+    def test_p8_the_readme_has_no_relative_team_work_path_in_a_code_span(self):
+        text = (ROOT / "README.md").read_text()
+        spans = re.findall(r"`([^`\n]+)`", text)
+        self.assertTrue(any(".team-work/" in s for s in spans))
+        for span in spans:
+            self.assertIsNone(re.search(r"(?<!<project root>/)\.team-work/", span), span)
 
 
 class PushAsksAndReapproval(unittest.TestCase):
