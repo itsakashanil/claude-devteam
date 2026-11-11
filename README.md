@@ -23,7 +23,7 @@ Every agent carries the same `## Commands and edits` section (one command per Ba
 
 ## The gates
 1. **Plan approval**: nothing is built until you approve the planner's plan. The question quotes every `Method:` line of the plan and the
-   plan's hash. To audit it, compare `git hash-object .team-work/<id>/plan.md` with the hash in the gate 1 question. Any change to the plan
+   plan's hash. To audit it, compare `git hash-object <project root>/.team-work/<id>/plan.md` with the hash in the gate 1 question. Any change to the plan
    after approval voids those methods until you approve again, even a mechanical change.
 2. **Production deploy**: the deployer builds and says "ready to deploy <version>". The manager always asks this question (in the terminal, and
    through the channel with a code when the channel is on), and "deployed" is its own question (a fresh code through the channel, none in the
@@ -125,7 +125,7 @@ before handing over, and you should run it before every push: `python3 <plugin>/
   files the manager writes after review; a `conftest.py` or `test_*.py` there, or a subfolder, is a STOP because test runners load code by those names). They read only common program-running keys in `.git/config`: not
   config.worktree, diff/merge drivers, `pager.<cmd>`, `gpg.program`, GIT_* variables, `~/.gitconfig` or the system config. Your own shell (PATH, `~/.bashrc`,
   aliases) and the installed plugin copy of the template are writable by the agents. They cannot see a symlinked parent directory of a target or prove you
-  ran them; the hash reaches you through the manager, so also compare it with `.team-work/<task-id>/reviewed-commit` and the review.
+  ran them; the hash reaches you through the manager, so also compare it with `<project root>/.team-work/<task-id>/reviewed-commit` and the review.
 - **Approvals are narrow.** An approval after a denial covers only the exact action you approved.
 - **One task at a time per repository**, except one independent task while another waits for you. Two manager sessions in one repo are not supported.
 - **Cost.** Opus plans and reviews and the suite runs three times per task; that is deliberate for security-sensitive code. For a low-risk

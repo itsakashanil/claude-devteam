@@ -23,7 +23,7 @@ first thing that is wrong.
    file means code changed after review: stop and report, do not build.
 2. Build as the normal user, never as root, with the profile's build artifact command, into `build_output_dir`.
 3. Record the build: a checksum of the main artifact (keep the first 12 characters and the full value) and the version
-   string `<git short hash> <commit subject> (<checksum prefix>)`.
+   string `<git short hash> <checksum prefix>`.
 4. Send the boss, with the profile's notify method, 3 to 5 short lines: `ready to deploy <version>`, the tests and review
    results, and exactly what to run. Do not ask for "deployed" yet: "deployed" counts only after the boss approved gate 2 (the manager asks that question). If notification is not set up, report that to the manager.
 5. STOP. Return `READY_TO_DEPLOY <version>` and the full checksum to the manager. Do nothing else: the boss decides when.
