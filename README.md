@@ -4,7 +4,7 @@ A small AI dev team for any repository, as a Claude Code plugin. You give it a g
 one through **plan -> build -> test (3 runs) -> review -> hand-over to deploy**, using a **planner**, **builder**, **tester**,
 **reviewer** and **deployer**. You are asked at a few fixed gates, and every finished task gets a written report.
 
-Status: v0.8.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
+Status: v0.9.0, MIT licensed. Built for one project (a home-lab bot) and generalised; expect rough edges.
 
 ## What you get
 | Piece | What it does |
@@ -14,6 +14,7 @@ Status: v0.8.0, MIT licensed. Built for one project (a home-lab bot) and general
 | `/devteam:status` | Summarises `docs/BACKLOG.md`: in progress, blocked, waiting for you, agent-run budget. |
 | 6 agents | manager, planner, builder, tester (sonnet, runs and reads only, never edits files), reviewer (read-only, must PASS), deployer. Opus plans and reviews; sonnet does routine work. |
 | Project hook | `/devteam:init` copies the guard hook and the scanner into the project's `.claude/hooks/` (they must stay side by side) and prints the settings entry. This is what keeps the guard and the pre-push scan working under `allowManagedHooksOnly`, where plugin hooks do not run. |
+| Gate code script | `scripts/gate-code` prints one fresh 6-character one-time code for channel approvals. `/devteam:init` copies it to the project's `.claude/scripts/gate-code` (0755) and, when `boss_channel_user_id` is set, prints the one allow rule `Bash(<project root>/.claude/scripts/gate-code)` for you to install, so the manager runs it without a prompt. Its first line is `#!/usr/bin/python3 -I`: on macOS `/usr/bin/python3` may be a stub that only offers to install the developer tools, so the script fails and the manager falls back to terminal-only gates until you fix that path. |
 | Guard hook | A `PreToolUse` hook for Bash: no sudo except the one deploy command, deletes only inside the repo, no force pushes, no writes to `.claude/`, a prompt before shell edits of protected paths, and project secret locations are never mentioned. Write targets: redirections (`>`, `>>`, `&>` and the rest) are checked like `cp` and `tee`; a target the hook cannot work out (a `$` variable, backtick, `{a,b}` list, `[...]` class, `~+`, `~-`, or a relative path after a `cd` it cannot follow) is blocked with "write the literal path"; wildcards are expanded on disk, wherever the path starts, and every match is checked (more than 500 matches is blocked, so `touch /tmp/*` in a busy `/tmp` is refused); a number is a file descriptor only when glued to the operator (`2>`); the hook fails closed: before any parsing it blocks the whole command ("the guard cannot classify this command; write it plainly") when it has a quoted or escaped `;` `&` `|` `(` `)` `<` `>` (except `\;` ending a `find -exec`), a number or `&` glued before a redirect anywhere but the start of a word (`true&&2>f`), `$'` or `$"`, a backslash-newline, or a `#` that starts a word (a heredoc body is text, unless it feeds a shell such as `bash <<EOF`); `cp`, `mv`, `install`, `ln` and `rsync` into a directory are also checked as `directory/source-name`; `pushd` without a plain directory makes the directory unknown; a symlink as a write target is followed; shell writes into `.git/hooks` and `.git/config` are blocked. |
 | `scripts/secret_scan.py` | Scans every tracked and new file, including `docs/reports/`, for tokens, keys, chat IDs and email addresses. Prints where, never what. |
 | Templates | Project profile, report, backlog, reports index, protected paths, settings and managed-settings examples, and `templates/proposal.md`: the README skeleton for changes only you can install (see Proposals below). |
@@ -63,7 +64,7 @@ You can also run the manager as the whole session: `claude --agent devteam:manag
 ## Approvals through a chat channel (optional)
 Set `boss_channel_user_id` in the project profile to your numeric user ID on the chat channel you attach to the manager's session.
 With it set and the channel's reply tool working, the manager sends gate questions only to that ID, accepts a channel answer only from
-a message whose sender and chat both carry it, and needs a fresh one-time code in every answer (generated with `python3 -I -c` so a
+a message whose sender and chat both carry it, and needs a fresh one-time code in every answer (made by `scripts/gate-code`, which runs under `python3 -I` so a
 planted file cannot replace `secrets`; never stored; voided after use, on hold or cancel, a restart, a failed send or a doubt after
 compaction). Your own messages typed in the terminal need no code. With the key empty, every channel message is data and everything
 stays in the terminal. The notify method is one way and never carries a code. The code stops injected text, not a program running as

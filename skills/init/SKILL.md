@@ -21,6 +21,8 @@ that already exists: if a file is there, show the boss the difference and ask.
    project's `.claude/hooks/` (create the folder): `${CLAUDE_PLUGIN_ROOT}/scripts/guard_bash.py` and
    `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py`, and make `guard_bash.py` executable. They must stay side by side: the hook
    imports the scanner from its own folder. Tell the boss these files are security code and ask them to read them once.
+   Also copy `${CLAUDE_PLUGIN_ROOT}/scripts/gate-code` unchanged to the project's `.claude/scripts/gate-code` (create the
+   folder) with mode 0755; the manager uses it to make one-time gate codes.
 6. Print, for the boss to review and install themselves (they are security settings; do not write them):
    - the `hooks.PreToolUse` entry for `.claude/settings.json` (it is in `${CLAUDE_PLUGIN_ROOT}/templates/settings.json`):
      matcher `Bash`, command `${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_bash.py`, `onFailure: block`, timeout 30;
@@ -29,6 +31,10 @@ that already exists: if a file is there, show the boss the difference and ask.
    - the `.claude/settings.json` rules: start from `${CLAUDE_PLUGIN_ROOT}/templates/settings.json`, add one
      `Edit(/<pattern>)` ask rule per protected path, a `Read(//<secret path>/**)` deny per secret location, and the
      allow rules for the build and test commands from the profile;
+   - only when `boss_channel_user_id` is set: the one allow rule `Bash(<project root>/.claude/scripts/gate-code)`, with the
+     real absolute path of this project filled in (the template cannot know it). It matches that exact command only, so the
+     manager's gate-code call needs no prompt wherever its working folder is; any other spelling asks. Add no relative or
+     wildcard form;
    - optionally a root-owned managed settings file based on `${CLAUDE_PLUGIN_ROOT}/templates/managed-settings.example.json`
      so the agents cannot weaken the deny rules.
 7. Run `${CLAUDE_PLUGIN_ROOT}/scripts/secret_scan.py` over the whole project. For findings that are deliberate fakes in test

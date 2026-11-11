@@ -170,8 +170,8 @@ class Agents(unittest.TestCase):
         self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
         self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
 
-    def test_the_plugin_version_is_0_8_0(self):
-        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.8.0")
+    def test_the_plugin_version_is_0_9_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.9.0")
 
     def test_the_readme_states_the_write_target_rule(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
@@ -501,7 +501,7 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t15_the_readme_lists_the_proposal_template_and_its_limits(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
-        for phrase in ("v0.8.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
+        for phrase in ("v0.9.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
             self.assertIn(phrase, flat, phrase)
 
     def test_r2_the_manager_checks_the_reviewed_line_and_the_boss_is_told_to_compare_it(self):
@@ -603,10 +603,29 @@ class DenialAndChannelGates(unittest.TestCase):
             self.assertIn(phrase, text, phrase)
 
     def test_code_generator_is_isolated(self):
-        gen = "python3 -I -c \"import secrets; print(''.join(secrets.choice('23456789ABCDEFGHJKMNPQRSTUVWXYZ') for _ in range(6)))\""
-        self.assertIn(gen, AGENTS["manager"])
+        text = flat(AGENTS["manager"])
+        self.assertIn("<project root>/.claude/scripts/gate-code", text)
+        for phrase in ("no arguments, no prompt", "the script's folder or the working directory",
+                       "If the script is missing, not executable, exits non-zero or prints anything else, make no code: ask in the terminal only."):
+            self.assertIn(phrase, text, phrase)
         for path in [*(ROOT / "agents").glob("*.md"), *(ROOT / "skills").rglob("*.md"), ROOT / "README.md"]:
             self.assertNotIn("python3 -c", path.read_text(), path.name)
+            if path.name != "README.md":
+                self.assertNotIn("import secrets", path.read_text(), path.name)
+
+    def test_t11b_init_copies_the_script_and_prints_the_absolute_allow_rule(self):
+        init = flat((ROOT / "skills" / "init" / "SKILL.md").read_text())
+        for phrase in ("${CLAUDE_PLUGIN_ROOT}/scripts/gate-code", ".claude/scripts/gate-code", "0755",
+                       "Bash(<project root>/.claude/scripts/gate-code)", "only when `boss_channel_user_id` is set"):
+            self.assertIn(phrase, init, phrase)
+
+    def test_t11b_the_settings_template_has_no_gate_code_rule(self):
+        self.assertNotIn("gate-code", (ROOT / "templates" / "settings.json").read_text())
+
+    def test_t11b_the_readme_names_the_script_and_the_macos_stub(self):
+        text = flat((ROOT / "README.md").read_text())
+        for phrase in ("scripts/gate-code", "/usr/bin/python3", "macOS", "stub"):
+            self.assertIn(phrase, text, phrase)
 
     def test_codes_single_use_never_stored(self):
         text = flat(AGENTS["manager"])
