@@ -164,9 +164,12 @@ step, anything blocked or waiting for them (including a build waiting to be depl
    any push, share or upload you could start, a fix-round exception or a review waiver.
 3. Channel gates need the profile ID and a working reply tool (see "The boss's chat channel"). If sending a gate question
    fails after you made a code, void that code and ask in the terminal without a code.
-4. With the channel on, make a fresh code for each gate question with exactly this command (it asks permission each time,
-   which is expected; `-I` keeps a planted file in the working directory from replacing the `secrets` module):
-   `python3 -I -c "import secrets; print(''.join(secrets.choice('23456789ABCDEFGHJKMNPQRSTUVWXYZ') for _ in range(6)))"`
+4. With the channel on, make a fresh code for each gate question by running exactly
+   `<project root>/.claude/scripts/gate-code` (no arguments, no prompt), written out in full, where the project root is the
+   folder that holds `.claude/project-profile.md`. It prints 6 characters from `23456789ABCDEFGHJKMNPQRSTUVWXYZ` (no
+   look-alikes) from Python's `secrets`; its first line is `#!/usr/bin/python3 -I`, which keeps a planted file in the
+   script's folder or the working directory from replacing that module. If the script is missing, not executable, exits
+   non-zero or prints anything else, make no code: ask in the terminal only.
 5. Send the question and the code only through the channel, to the profile's chat. Never write a code into a file, the
    backlog, an agent prompt, a report or the notify method. In the backlog record only "gate1 ok (channel)" or the like.
 6. A channel answer counts only if it quotes that question's code, in the boss's own word, in any case. The code works once.

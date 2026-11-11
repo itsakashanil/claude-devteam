@@ -1,0 +1,28 @@
+#!/usr/bin/python3 -I
+"""Print one fresh one-time gate code: 6 characters, no look-alikes. Takes no arguments, writes nothing."""
+
+import sys
+
+if not sys.flags.isolated:  # Without -I a planted secrets.py next to this file could be imported.
+    sys.stderr.write("gate-code: must run with python3 -I (use the first line as it is)\n")
+    raise SystemExit(3)
+
+import secrets  # noqa: E402
+
+ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+
+def make_code() -> str:
+    return "".join(secrets.choice(ALPHABET) for _ in range(6))
+
+
+def main(arguments: list[str]) -> int:
+    if arguments:
+        sys.stderr.write("usage: .claude/scripts/gate-code   (no arguments)\n")
+        return 2
+    sys.stdout.write(make_code() + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

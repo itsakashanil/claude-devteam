@@ -1,6 +1,6 @@
 {
   "name": "devteam",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "MIT",
   "description": "A small AI dev team for any repo: manager, planner, builder, tester, reviewer and deployer agents, approval gates, a Bash guard hook, and a written report per task.",
   "author": {
