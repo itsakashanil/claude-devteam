@@ -118,7 +118,7 @@ class Agents(unittest.TestCase):
 
     def test_the_manager_keeps_the_per_task_scan_adds_the_push_scan_and_never_edits_the_allow_list(self):
         text = AGENTS["manager"]
-        self.assertIn("secret_scan.py docs/reports", text)
+        self.assertIn("secret_scan.py <project root>/docs/reports", text)
         self.assertIn("whole-repo secret scan", text)
         self.assertIn("propose an entry, never add one", text)
 
@@ -170,8 +170,8 @@ class Agents(unittest.TestCase):
         self.assertNotIn("You own this file and the reports; they are the only files you edit", flat)
         self.assertRegex(flat, r"A failed test run, a missing test or a failed review sends the work back to the builder[^.]*fix round")
 
-    def test_the_plugin_version_is_0_9_0(self):
-        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.9.0")
+    def test_the_plugin_version_is_0_10_0(self):
+        self.assertEqual(json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"], "0.10.0")
 
     def test_the_readme_states_the_write_target_rule(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
@@ -501,7 +501,7 @@ class ProposalTemplate(unittest.TestCase):
 
     def test_t15_the_readme_lists_the_proposal_template_and_its_limits(self):
         flat = " ".join((ROOT / "README.md").read_text().split())
-        for phrase in ("v0.9.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
+        for phrase in ("v0.10.0", "templates/proposal.md", "Proposals", "same bytes", "~/.gitconfig"):
             self.assertIn(phrase, flat, phrase)
 
     def test_r2_the_manager_checks_the_reviewed_line_and_the_boss_is_told_to_compare_it(self):
@@ -550,7 +550,7 @@ class DenialAndChannelGates(unittest.TestCase):
     def test_manager_puts_allowed_method_only_from_the_plan_word_for_word(self):
         text = flat(AGENTS["manager"])
         for phrase in ("`Allowed method:`", "quoting, word for word, a method the approved plan names for that step",
-                       "never any other text", "BRIEF RULES", "`Brief rules:`", "git hash-object .team-work/<task-id>/plan.md",
+                       "never any other text", "BRIEF RULES", "`Brief rules:`", "git hash-object <project root>/.team-work/<task-id>/plan.md",
                        "record it in the backlog and in the gate 1 question"):
             self.assertIn(phrase, text, phrase)
         self.assertIn("`Method:` line", flat(AGENTS["planner"]))
@@ -706,7 +706,7 @@ class DenialAndChannelGates(unittest.TestCase):
         text = flat(AGENTS["manager"])
         for phrase in ("The gate 1 question quotes every `Method:` line of the plan word for word",
                        "An `Allowed method:` line needs the same check as the rerun",
-                       "`git hash-object .team-work/<task-id>/plan.md` still equals the hash recorded at gate 1",
+                       "`git hash-object <project root>/.team-work/<task-id>/plan.md` still equals the hash recorded at gate 1",
                        "An `Allowed method:` line names the step it belongs to",
                        "Any change to plan.md after gate 1 voids every `Method:` line",
                        "no `Allowed method:` lines, no reruns", "until the boss approves the changed plan",
@@ -781,13 +781,89 @@ class DenialAndChannelGates(unittest.TestCase):
         self.assertNotIn("tell the boss at the end", text)
 
 
+WORKING_RULES = "## Commands and edits\n"
+COMMAND_START = re.compile(r"^(git|python3|dotnet|\$\{CLAUDE_PLUGIN_ROOT\}/scripts/|<project root>/)")
+
+
+def working_rules(text):
+    return text.split(WORKING_RULES, 1)[1].split("\n## ", 1)[0]
+
+
+def relative_paths_in_commands(text):
+    """Tokens that are relative paths inside inline command examples (code spans that start with a command)."""
+    found = []
+    for span in re.findall(r"`([^`]+)`", flat(text)):
+        if not COMMAND_START.match(span):
+            continue
+        for token in span.replace("<project root>", "/ROOT").split():
+            if "/" not in token or token.startswith(("/", "$", "<", "-")) or "=" in token or ":" in token:
+                continue
+            found.append(token)
+    return found
+
+
+class AgentWorkingRules(unittest.TestCase):
+    """T-017: the boss's standing rules for commands and edits are in every agent, word for word."""
+
+    def test_p1_the_section_is_in_every_agent_once_before_the_denial_block(self):
+        self.assertEqual(len(AGENTS), 6)
+        for name, text in AGENTS.items():
+            self.assertEqual(text.count(WORKING_RULES), 1, name)
+            self.assertLess(text.index(WORKING_RULES), text.index("## When something is denied\n"), name)
+
+    def test_p2_the_section_is_identical_in_every_agent(self):
+        blocks = {name: flat(working_rules(text)) for name, text in AGENTS.items()}
+        self.assertEqual(len(set(blocks.values())), 1, "the Commands and edits section differs between agents")
+
+    def test_p3_the_section_states_each_of_the_seven_rules(self):
+        block = flat(working_rules(AGENTS["manager"]))
+        rules = (
+            "These hold for every command you run, write into a plan or a brief, or judge in a review.",
+            "one command per tool call, written out in full with absolute paths",
+            "No shell variables or VAR=value prefixes, no loops, no $(...), no ; or && chains, and no quoted ( ) < > | or \\|",
+            "the guard blocks what it cannot classify. One test suite per command.",
+            "`git commit -F <file>` or `git merge -F <file>`, message in a scratchpad file, never -m",
+            "use the Edit and Write tools, never the shell or python",
+            "is plain `git push ...` run from the repo folder, never `git -C`",
+            "(the builder, tester and deployer never push)",
+            "fail when the sandbox keeps them read-only: the boss does them from his own shell. Stop and ask; do not retry.",
+            "Read, then Write into docs/proposed/<name>/ only, never cp",
+            "`git worktree add --detach` into the scratchpad, apply with Read then Write, never cp -r",
+            "keep every folder in the overlay (removing one can hide path-bound tests)",
+            "A block by a hook, a permission rule, the sandbox or the proxy is a denial, even for a read: stop and report it (see below)",
+            "unless your brief's `Allowed method:` line covers that step",
+            "never switch tools (Read, Grep, git grep) to get the same information",
+        )
+        for phrase in rules:
+            self.assertIn(phrase, block, phrase)
+
+    def test_p4_no_forbidden_shape_outside_the_section(self):
+        for name, text in AGENTS.items():
+            outside = text.replace(working_rules(text), "")
+            for shape in ("$(", "git -C", "commit -m", "merge -m", "cp -r"):
+                self.assertNotIn(shape, outside, f"{name} contains {shape}")
+
+    def test_p5_section_lines_are_at_most_120_characters(self):
+        for name, text in AGENTS.items():
+            for line in working_rules(text).splitlines():
+                self.assertLessEqual(len(line), 120, f"{name}: {line}")
+
+    def test_p6_no_command_example_uses_a_relative_path(self):
+        self.assertEqual(relative_paths_in_commands("Run `git hash-object .team-work/x/plan.md`."), [".team-work/x/plan.md"])
+        self.assertEqual(relative_paths_in_commands("Run `git status -- docs/proposed/<name>` now."), ["docs/proposed/<name>"])
+        self.assertEqual(relative_paths_in_commands("Run `git hash-object <project root>/.team-work/x/plan.md`."), [])
+        self.assertEqual(relative_paths_in_commands("Run `git show <h>:docs/a.md` and `${CLAUDE_PLUGIN_ROOT}/scripts/x.py /abs/docs`."), [])
+        for name, text in AGENTS.items():
+            self.assertEqual(relative_paths_in_commands(text), [], name)
+
+
 class PushAsksAndReapproval(unittest.TestCase):
     """T-007c: pushes ask the boss in the permission prompt; a changed plan is re-hashed before it is put to the boss."""
 
     def test_a_changed_plan_is_hashed_before_asking_and_the_question_carries_hash_and_methods(self):
         text = flat(AGENTS["manager"])
         for phrase in (
-            "When a changed plan needs the boss's approval again, run `git hash-object .team-work/<task-id>/plan.md` before asking, "
+            "When a changed plan needs the boss's approval again, run `git hash-object <project root>/.team-work/<task-id>/plan.md` before asking, "
             "put the new hash and every `Method:` line in that question, and record the hash in the backlog when the boss approves.",
         ):
             self.assertIn(phrase, text, phrase)
